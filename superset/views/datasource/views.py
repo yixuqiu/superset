@@ -14,7 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-import json
 from collections import Counter
 from typing import Any
 
@@ -39,6 +38,7 @@ from superset.exceptions import SupersetException, SupersetSecurityException
 from superset.models.core import Database
 from superset.sql_parse import Table
 from superset.superset_typing import FlaskResponse
+from superset.utils import json
 from superset.utils.core import DatasourceType
 from superset.views.base import (
     api,
@@ -116,7 +116,7 @@ class Datasource(BaseSupersetView):
             )
         orm_datasource.update_from_object(datasource_dict)
         data = orm_datasource.data
-        db.session.commit()
+        db.session.commit()  # pylint: disable=consider-using-transaction
 
         return self.json_response(sanitize_datasource_data(data))
 
@@ -165,6 +165,7 @@ class Datasource(BaseSupersetView):
 
         datasource = SqlaTable.get_datasource_by_name(
             database_name=params["database_name"],
+            catalog=params.get("catalog_name"),
             schema=params["schema_name"],
             datasource_name=params["table_name"],
         )

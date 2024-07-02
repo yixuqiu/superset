@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from io import BytesIO
 from typing import Any
@@ -29,7 +28,7 @@ from uuid import UUID
 import pytest
 from flask import current_app
 from freezegun import freeze_time
-from pytest_mock import MockFixture
+from pytest_mock import MockerFixture
 from sqlalchemy.orm.session import Session
 
 from superset import db
@@ -41,6 +40,7 @@ from superset.db_engine_specs.sqlite import SqliteEngineSpec
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetSecurityException
 from superset.sql_parse import Table
+from superset.utils import json
 from tests.unit_tests.fixtures.common import (
     create_columnar_file,
     create_csv_file,
@@ -115,12 +115,12 @@ def test_post_with_uuid(
     payload = response.json
     assert payload["result"]["uuid"] == "7c1b7880-a59d-47cd-8bf1-f1eb8d2863cb"
 
-    database = db.session.query(Database).one()
+    database = session.query(Database).one()
     assert database.uuid == UUID("7c1b7880-a59d-47cd-8bf1-f1eb8d2863cb")
 
 
 def test_password_mask(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     app: Any,
     session: Session,
     client: Any,
@@ -176,7 +176,7 @@ def test_password_mask(
 
 
 def test_database_connection(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     app: Any,
     session: Session,
     client: Any,
@@ -237,6 +237,7 @@ def test_database_connection(
             "driver": "gsheets",
             "engine_information": {
                 "disable_ssh_tunneling": True,
+                "supports_dynamic_catalog": False,
                 "supports_file_upload": True,
             },
             "expose_in_sqllab": True,
@@ -308,6 +309,7 @@ def test_database_connection(
             "driver": "gsheets",
             "engine_information": {
                 "disable_ssh_tunneling": True,
+                "supports_dynamic_catalog": False,
                 "supports_file_upload": True,
             },
             "expose_in_sqllab": True,
@@ -407,7 +409,7 @@ def test_non_zip_import(client: Any, full_api_access: None) -> None:
 
 
 def test_delete_ssh_tunnel(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     app: Any,
     session: Session,
     client: Any,
@@ -485,7 +487,7 @@ def test_delete_ssh_tunnel(
 
 
 def test_delete_ssh_tunnel_not_found(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     app: Any,
     session: Session,
     client: Any,
@@ -561,7 +563,7 @@ def test_delete_ssh_tunnel_not_found(
 
 
 def test_apply_dynamic_database_filter(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     app: Any,
     session: Session,
     client: Any,
@@ -657,7 +659,7 @@ def test_apply_dynamic_database_filter(
 
 
 def test_oauth2_happy_path(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     session: Session,
     client: Any,
     full_api_access: None,
@@ -725,7 +727,7 @@ def test_oauth2_happy_path(
 
 
 def test_oauth2_multiple_tokens(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     session: Session,
     client: Any,
     full_api_access: None,
@@ -805,7 +807,7 @@ def test_oauth2_multiple_tokens(
 
 
 def test_oauth2_error(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     session: Session,
     client: Any,
     full_api_access: None,
@@ -928,7 +930,7 @@ def test_csv_upload(
     payload: dict[str, Any],
     upload_called_with: tuple[int, str, Any, dict[str, Any]],
     reader_called_with: dict[str, Any],
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1068,7 +1070,7 @@ def test_csv_upload(
 def test_csv_upload_validation(
     payload: Any,
     expected_response: dict[str, str],
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1087,7 +1089,7 @@ def test_csv_upload_validation(
 
 
 def test_csv_upload_file_size_validation(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1129,7 +1131,7 @@ def test_csv_upload_file_size_validation(
 )
 def test_csv_upload_file_extension_invalid(
     filename: str,
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1165,7 +1167,7 @@ def test_csv_upload_file_extension_invalid(
 )
 def test_csv_upload_file_extension_valid(
     filename: str,
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1270,7 +1272,7 @@ def test_excel_upload(
     payload: dict[str, Any],
     upload_called_with: tuple[int, str, Any, dict[str, Any]],
     reader_called_with: dict[str, Any],
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1365,7 +1367,7 @@ def test_excel_upload(
 def test_excel_upload_validation(
     payload: Any,
     expected_response: dict[str, str],
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1400,7 +1402,7 @@ def test_excel_upload_validation(
 )
 def test_excel_upload_file_extension_invalid(
     filename: str,
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1476,7 +1478,7 @@ def test_columnar_upload(
     payload: dict[str, Any],
     upload_called_with: tuple[int, str, Any, dict[str, Any]],
     reader_called_with: dict[str, Any],
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1542,7 +1544,7 @@ def test_columnar_upload(
 def test_columnar_upload_validation(
     payload: Any,
     expected_response: dict[str, str],
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1572,7 +1574,7 @@ def test_columnar_upload_validation(
 )
 def test_columnar_upload_file_extension_valid(
     filename: str,
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1608,7 +1610,7 @@ def test_columnar_upload_file_extension_valid(
 )
 def test_columnar_upload_file_extension_invalid(
     filename: str,
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1628,7 +1630,9 @@ def test_columnar_upload_file_extension_invalid(
     assert response.json == {"message": {"file": ["File extension is not allowed."]}}
 
 
-def test_csv_metadata(mocker: MockFixture, client: Any, full_api_access: None) -> None:
+def test_csv_metadata(
+    mocker: MockerFixture, client: Any, full_api_access: None
+) -> None:
     _ = mocker.patch.object(CSVReader, "file_metadata")
     response = client.post(
         "/api/v1/database/csv_metadata/",
@@ -1639,7 +1643,7 @@ def test_csv_metadata(mocker: MockFixture, client: Any, full_api_access: None) -
 
 
 def test_csv_metadata_bad_extension(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(CSVReader, "file_metadata")
     response = client.post(
@@ -1652,7 +1656,7 @@ def test_csv_metadata_bad_extension(
 
 
 def test_csv_metadata_validation(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(CSVReader, "file_metadata")
     response = client.post(
@@ -1665,7 +1669,7 @@ def test_csv_metadata_validation(
 
 
 def test_excel_metadata(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(ExcelReader, "file_metadata")
     response = client.post(
@@ -1677,7 +1681,7 @@ def test_excel_metadata(
 
 
 def test_excel_metadata_bad_extension(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(ExcelReader, "file_metadata")
     response = client.post(
@@ -1690,7 +1694,7 @@ def test_excel_metadata_bad_extension(
 
 
 def test_excel_metadata_validation(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(ExcelReader, "file_metadata")
     response = client.post(
@@ -1703,7 +1707,7 @@ def test_excel_metadata_validation(
 
 
 def test_columnar_metadata(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(ColumnarReader, "file_metadata")
     response = client.post(
@@ -1715,7 +1719,7 @@ def test_columnar_metadata(
 
 
 def test_columnar_metadata_bad_extension(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(ColumnarReader, "file_metadata")
     response = client.post(
@@ -1728,7 +1732,7 @@ def test_columnar_metadata_bad_extension(
 
 
 def test_columnar_metadata_validation(
-    mocker: MockFixture, client: Any, full_api_access: None
+    mocker: MockerFixture, client: Any, full_api_access: None
 ) -> None:
     _ = mocker.patch.object(ColumnarReader, "file_metadata")
     response = client.post(
@@ -1741,7 +1745,7 @@ def test_columnar_metadata_validation(
 
 
 def test_table_metadata_happy_path(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1782,7 +1786,7 @@ def test_table_metadata_happy_path(
 
 
 def test_table_metadata_no_table(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1815,7 +1819,7 @@ def test_table_metadata_no_table(
 
 
 def test_table_metadata_slashes(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1835,7 +1839,7 @@ def test_table_metadata_slashes(
 
 
 def test_table_metadata_invalid_database(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1870,7 +1874,7 @@ def test_table_metadata_invalid_database(
 
 
 def test_table_metadata_unauthorized(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1905,7 +1909,7 @@ def test_table_metadata_unauthorized(
 
 
 def test_table_extra_metadata_happy_path(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1946,7 +1950,7 @@ def test_table_extra_metadata_happy_path(
 
 
 def test_table_extra_metadata_no_table(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1979,7 +1983,7 @@ def test_table_extra_metadata_no_table(
 
 
 def test_table_extra_metadata_slashes(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -1999,7 +2003,7 @@ def test_table_extra_metadata_slashes(
 
 
 def test_table_extra_metadata_invalid_database(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -2034,7 +2038,7 @@ def test_table_extra_metadata_invalid_database(
 
 
 def test_table_extra_metadata_unauthorized(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -2069,7 +2073,7 @@ def test_table_extra_metadata_unauthorized(
 
 
 def test_catalogs(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
@@ -2109,7 +2113,7 @@ def test_catalogs(
 
 
 def test_schemas(
-    mocker: MockFixture,
+    mocker: MockerFixture,
     client: Any,
     full_api_access: None,
 ) -> None:
