@@ -16,20 +16,53 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
-import { isFeatureEnabled, FeatureFlag, t, useTheme } from '@superset-ui/core';
+import { t } from '@apache-superset/core/translation';
+import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
+import { css, styled } from '@apache-superset/core/theme';
 import { Link, useHistory } from 'react-router-dom';
-import ConfirmStatusChange from 'src/components/ConfirmStatusChange';
-import Icons from 'src/components/Icons';
+import {
+  ConfirmStatusChange,
+  FaveStar,
+  Icons,
+  Label,
+  ListViewCard,
+  MenuItem,
+  Tooltip,
+} from '@superset-ui/core/components';
 import Chart from 'src/types/Chart';
+import { SubjectPile } from 'src/features/subjects/SubjectPile';
+import { KebabMenuButton } from 'src/components';
+import {
+  handleChartDelete,
+  CardStyles,
+  isNavigationHandledByLink,
+} from 'src/views/CRUD/utils';
+import { assetUrl } from 'src/utils/assetUrl';
+import {
+  archiveConfirmContent,
+  archiveTitle,
+  deleteActionLabel,
+} from 'src/utils/softDeleteCopy';
+import type { ListViewFetchDataConfig as FetchDataConfig } from 'src/components';
+import { TableTab } from 'src/views/CRUD/types';
+import { isUserEditorOrAdmin } from 'src/dashboard/util/permissionUtils';
+import type { UserWithPermissionsAndRoles } from 'src/types/bootstrapTypes';
 
-import ListViewCard from 'src/components/ListViewCard';
-import Label from 'src/components/Label';
-import { AntdDropdown } from 'src/components';
-import { Menu } from 'src/components/Menu';
-import FaveStar from 'src/components/FaveStar';
-import FacePile from 'src/components/FacePile';
-import { handleChartDelete, CardStyles } from 'src/views/CRUD/utils';
+const MenuItemButton = styled.button`
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  &:disabled {
+    cursor: not-allowed;
+  }
+`;
 
 interface ChartCardProps {
   chart: Chart;
@@ -38,14 +71,15 @@ interface ChartCardProps {
   bulkSelectEnabled: boolean;
   addDangerToast: (msg: string) => void;
   addSuccessToast: (msg: string) => void;
-  refreshData: () => void;
+  refreshData: (config?: FetchDataConfig | null) => void;
   loading?: boolean;
   saveFavoriteStatus: (id: number, isStarred: boolean) => void;
   favoriteStatus: boolean;
   chartFilter?: string;
-  userId?: string | number;
+  user?: UserWithPermissionsAndRoles;
   showThumbnails?: boolean;
   handleBulkChartExport: (chartsToExport: Chart[]) => void;
+  getData?: (tab: TableTab) => void;
 }
 
 export default function ChartCard({
@@ -61,81 +95,165 @@ export default function ChartCard({
   saveFavoriteStatus,
   favoriteStatus,
   chartFilter,
-  userId,
+  user,
   handleBulkChartExport,
+  getData,
 }: ChartCardProps) {
+  const userId = user?.userId;
+
   const history = useHistory();
   const canEdit = hasPerm('can_write');
   const canDelete = hasPerm('can_write');
   const canExport = hasPerm('can_export');
-  const theme = useTheme();
+  const softDelete = isFeatureEnabled(FeatureFlag.SoftDelete);
+  const allowEdit = isUserEditorOrAdmin(
+    user,
+    chart.editors,
+    chart.extra_editors,
+  );
+  const menuItems: MenuItem[] = [];
+  const editPermissionHint = allowEdit
+    ? null
+    : t(
+        'You must be a chart editor in order to edit. Please reach out to a chart editor to request modifications or edit access.',
+      );
+  const deletePermissionHint = allowEdit
+    ? null
+    : softDelete
+      ? t(
+          'You must be a chart editor in order to archive. Please reach out to a chart editor to request modifications or edit access.',
+        )
+      : t(
+          'You must be a chart editor in order to delete. Please reach out to a chart editor to request modifications or edit access.',
+        );
 
-  const menu = (
-    <Menu>
-      {canDelete && (
-        <Menu.Item>
-          <ConfirmStatusChange
-            title={t('Please confirm')}
-            description={
+  if (canEdit) {
+    menuItems.push({
+      key: 'edit',
+      label: (
+        <Tooltip
+          placement="right"
+          trigger={['hover', 'focus']}
+          title={editPermissionHint}
+        >
+          <span>
+            <MenuItemButton
+              type="button"
+              data-test="chart-list-edit-option"
+              disabled={!allowEdit}
+              aria-disabled={!allowEdit}
+              onClick={allowEdit ? () => openChartEditModal(chart) : undefined}
+            >
+              <Icons.EditOutlined
+                iconSize="l"
+                css={css`
+                  vertical-align: text-top;
+                `}
+              />{' '}
+              {t('Edit')}
+            </MenuItemButton>
+          </span>
+        </Tooltip>
+      ),
+      disabled: !allowEdit,
+    });
+  }
+
+  if (canExport) {
+    menuItems.push({
+      key: 'export',
+      label: (
+        <MenuItemButton
+          type="button"
+          data-test="chart-list-export-option"
+          onClick={() => handleBulkChartExport([chart])}
+        >
+          <Icons.UploadOutlined
+            iconSize="l"
+            css={css`
+              vertical-align: text-top;
+            `}
+          />{' '}
+          {t('Export')}
+        </MenuItemButton>
+      ),
+    });
+  }
+
+  if (canDelete) {
+    // With soft delete on, deleting archives the chart (recoverable), so the
+    // confirmation drops the type-DELETE friction and uses the shared archive
+    // copy -- matching the list view's dialog for the same action.
+    menuItems.push({
+      key: 'delete',
+      label: (
+        <ConfirmStatusChange
+          recoverable={softDelete}
+          title={
+            softDelete ? archiveTitle(chart.slice_name) : t('Please confirm')
+          }
+          description={
+            softDelete ? (
+              <p>{archiveConfirmContent('chart', t('chart'))}</p>
+            ) : (
               <>
                 {t('Are you sure you want to delete')} <b>{chart.slice_name}</b>
                 ?
               </>
-            }
-            onConfirm={() =>
-              handleChartDelete(
-                chart,
-                addSuccessToast,
-                addDangerToast,
-                refreshData,
-                chartFilter,
-                userId,
-              )
-            }
-          >
-            {confirmDelete => (
-              <div
-                data-test="chart-list-delete-option"
-                role="button"
-                tabIndex={0}
-                className="action-button"
-                onClick={confirmDelete}
-              >
-                <Icons.Trash iconSize="l" /> {t('Delete')}
-              </div>
-            )}
-          </ConfirmStatusChange>
-        </Menu.Item>
-      )}
-      {canExport && (
-        <Menu.Item>
-          <div
-            role="button"
-            tabIndex={0}
-            onClick={() => handleBulkChartExport([chart])}
-          >
-            <Icons.Share iconSize="l" /> {t('Export')}
-          </div>
-        </Menu.Item>
-      )}
-      {canEdit && (
-        <Menu.Item>
-          <div
-            data-test="chart-list-edit-option"
-            role="button"
-            tabIndex={0}
-            onClick={() => openChartEditModal(chart)}
-          >
-            <Icons.EditAlt iconSize="l" /> {t('Edit')}
-          </div>
-        </Menu.Item>
-      )}
-    </Menu>
-  );
+            )
+          }
+          onConfirm={() =>
+            handleChartDelete(
+              chart,
+              addSuccessToast,
+              addDangerToast,
+              refreshData,
+              chartFilter,
+              userId,
+              getData,
+            )
+          }
+        >
+          {confirmDelete => (
+            <Tooltip
+              placement="right"
+              trigger={['hover', 'focus']}
+              title={deletePermissionHint}
+            >
+              <span>
+                <MenuItemButton
+                  type="button"
+                  disabled={!allowEdit}
+                  aria-disabled={!allowEdit}
+                  data-test="chart-list-delete-option"
+                  className="action-button"
+                  onClick={allowEdit ? confirmDelete : undefined}
+                >
+                  <Icons.DeleteOutlined
+                    iconSize="l"
+                    css={css`
+                      vertical-align: text-top;
+                    `}
+                  />{' '}
+                  {deleteActionLabel()}
+                </MenuItemButton>
+              </span>
+            </Tooltip>
+          )}
+        </ConfirmStatusChange>
+      ),
+      disabled: !allowEdit,
+    });
+  }
+
   return (
     <CardStyles
-      onClick={() => {
-        if (!bulkSelectEnabled && chart.url) {
+      onClick={event => {
+        if (
+          !bulkSelectEnabled &&
+          chart.url &&
+          !isNavigationHandledByLink(event)
+        ) {
           history.push(chart.url);
         }
       }}
@@ -152,12 +270,12 @@ export default function ChartCard({
         }
         url={bulkSelectEnabled ? undefined : chart.url}
         imgURL={chart.thumbnail_url || ''}
-        imgFallbackURL="/static/assets/images/chart-card-fallback.svg"
+        imgFallbackURL={assetUrl(
+          '/static/assets/images/chart-card-fallback.svg',
+        )}
         description={t('Modified %s', chart.changed_on_delta_humanized)}
-        coverLeft={<FacePile users={chart.owners || []} />}
-        coverRight={
-          <Label type="secondary">{chart.datasource_name_text}</Label>
-        }
+        coverLeft={<SubjectPile subjects={chart.editors || []} />}
+        coverRight={<Label>{chart.datasource_name_text}</Label>}
         linkComponent={Link}
         actions={
           <ListViewCard.Actions
@@ -173,9 +291,18 @@ export default function ChartCard({
                 isStarred={favoriteStatus}
               />
             )}
-            <AntdDropdown overlay={menu}>
-              <Icons.MoreVert iconColor={theme.colors.grayscale.base} />
-            </AntdDropdown>
+            <KebabMenuButton
+              menuItems={menuItems}
+              dataTest="chart-card-menu"
+              tooltipTitle={
+                !allowEdit && (canEdit || canDelete) ? (
+                  <>
+                    {canEdit && <div>{editPermissionHint}</div>}
+                    {canDelete && <div>{deletePermissionHint}</div>}
+                  </>
+                ) : undefined
+              }
+            />
           </ListViewCard.Actions>
         }
       />

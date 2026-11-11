@@ -15,16 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from functools import partial
 from typing import Any
 
-from superset import db, security_manager
+from jinja2.exceptions import TemplateError
+
+from superset import security_manager
 from superset.commands.base import BaseCommand, CreateMixin
 from superset.commands.tag.exceptions import TagCreateFailedError, TagInvalidError
 from superset.commands.tag.utils import to_object_model, to_object_type
-from superset.daos.exceptions import DAOCreateFailedError
+from superset.commands.utils import current_user_can_modify_object
 from superset.daos.tag import TagDAO
-from superset.exceptions import SupersetSecurityException
+from superset.exceptions import SupersetParseError, SupersetSecurityException
 from superset.tags.models import ObjectType, TagType
+from superset.utils.decorators import on_error, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +39,18 @@ class CreateCustomTagCommand(CreateMixin, BaseCommand):
         self._object_id = object_id
         self._tags = tags
 
+    @transaction(on_error=partial(on_error, reraise=TagCreateFailedError))
     def run(self) -> None:
         self.validate()
-        try:
-            object_type = to_object_type(self._object_type)
-            if object_type is None:
-                raise TagCreateFailedError(f"invalid object type {self._object_type}")
-            TagDAO.create_custom_tagged_objects(
-                object_type=object_type,
-                object_id=self._object_id,
-                tag_names=self._tags,
-            )
-        except DAOCreateFailedError as ex:
-            logger.exception(ex.exception)
-            raise TagCreateFailedError() from ex
+        object_type = to_object_type(self._object_type)
+        if object_type is None:
+            raise TagCreateFailedError(f"invalid object type {self._object_type}")
+
+        TagDAO.create_custom_tagged_objects(
+            object_type=object_type,
+            object_id=self._object_id,
+            tag_names=self._tags,
+        )
 
     def validate(self) -> None:
         exceptions = []
@@ -61,8 +63,65 @@ class CreateCustomTagCommand(CreateMixin, BaseCommand):
             exceptions.append(
                 TagCreateFailedError(f"invalid object type {self._object_type}")
             )
+
+        # Validate user has access to the target object
+        if object_type:
+            self._validate_object_access(object_type, self._object_id, exceptions)
+
         if exceptions:
             raise TagInvalidError(exceptions=exceptions)
+
+    def _validate_object_access(
+        self, object_type: ObjectType, object_id: int, exceptions: list[Any]
+    ) -> None:
+        """Validate that the current user has access to the target object."""
+        # Skip base filter so we can distinguish "not found" from "no access"
+        target_object = to_object_model(object_type, object_id, skip_base_filter=True)
+        if not target_object:
+            # Allow operation on stale references; no object to authorize against
+            return
+
+        try:
+            if object_type == ObjectType.dashboard:
+                security_manager.raise_for_access(dashboard=target_object)
+            elif object_type == ObjectType.chart:
+                security_manager.raise_for_access(chart=target_object)
+            elif object_type == ObjectType.query:
+                security_manager.raise_for_access(query=target_object)
+            elif object_type == ObjectType.dataset:
+                security_manager.raise_for_access(datasource=target_object)
+            else:
+                exceptions.append(
+                    TagCreateFailedError(
+                        f"Access validation not supported for {object_type}"
+                    )
+                )
+        except SupersetSecurityException:
+            # A routine, expected authorization denial; swallowed silently by
+            # design (no logging) and surfaced to the caller as a validation
+            # failure rather than an unhandled 500.
+            exceptions.append(
+                TagCreateFailedError(
+                    f"Could not validate access for {object_type} {object_id}"
+                )
+            )
+        except (TemplateError, SupersetParseError) as ex:
+            # Authorizing a saved query parses its Jinja-templated SQL to resolve
+            # table references. Malformed Jinja (TemplateError) or an
+            # unresolvable partition macro (SupersetParseError) is a validation
+            # failure, not an unhandled 500 -- but unlike an access denial it is
+            # genuinely unexpected, so log it for server-side visibility and
+            # preserve the underlying error text instead of discarding it.
+            logger.warning(
+                "Could not parse query %s while validating tag access: %s",
+                object_id,
+                str(ex),
+            )
+            exceptions.append(
+                TagCreateFailedError(
+                    f"Could not validate access for {object_type} {object_id}: {ex}"
+                )
+            )
 
 
 class CreateCustomTagWithRelationshipsCommand(CreateMixin, BaseCommand):
@@ -71,52 +130,48 @@ class CreateCustomTagWithRelationshipsCommand(CreateMixin, BaseCommand):
         self._bulk_create = bulk_create
         self._skipped_tagged_objects: set[tuple[str, int]] = set()
 
+    @transaction(on_error=partial(on_error, reraise=TagCreateFailedError))
     def run(self) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
         self.validate()
 
-        try:
-            tag_name = self._properties["name"]
-            tag = TagDAO.get_by_name(tag_name.strip(), TagType.custom)
-            TagDAO.create_tag_relationship(
-                objects_to_tag=self._properties.get("objects_to_tag", []),
-                tag=tag,
-                bulk_create=self._bulk_create,
-            )
+        tag_name = self._properties["name"]
+        tag = TagDAO.get_by_name(tag_name.strip(), TagType.custom)
+        TagDAO.create_tag_relationship(
+            objects_to_tag=self._properties.get("objects_to_tag", []),
+            tag=tag,
+            bulk_create=self._bulk_create,
+        )
 
-            tag.description = self._properties.get("description", "")
-
-            db.session.commit()
-
-            return set(self._properties["objects_to_tag"]), self._skipped_tagged_objects
-
-        except DAOCreateFailedError as ex:
-            logger.exception(ex.exception)
-            raise TagCreateFailedError() from ex
+        tag.description = self._properties.get("description", "")
+        return set(self._properties["objects_to_tag"]), self._skipped_tagged_objects
 
     def validate(self) -> None:
         exceptions = []
         objects_to_tag = set(self._properties.get("objects_to_tag", []))
+
         for obj_type, obj_id in objects_to_tag:
             object_type = to_object_type(obj_type)
 
             # Validate object type
-            for obj_type, obj_id in objects_to_tag:
-                object_type = to_object_type(obj_type)
+            if not object_type:
+                exceptions.append(TagInvalidError(f"invalid object type {object_type}"))
+                continue
 
-                if not object_type:
-                    exceptions.append(
-                        TagInvalidError(f"invalid object type {object_type}")
-                    )
-                try:
-                    if model := to_object_model(object_type, obj_id):  # type: ignore
-                        security_manager.raise_for_ownership(model)
-                except SupersetSecurityException:
-                    # skip the object if the user doesn't have access
+            try:
+                # Look the object up bypassing the access base filter, so an
+                # object the user cannot access resolves to a model and is
+                # checked here. Without skip_base_filter it returns None for an
+                # inaccessible object and the tag write would pass through
+                # unchecked. Skip objects the user has no access to.
+                model = to_object_model(object_type, obj_id, skip_base_filter=True)
+                if model and not current_user_can_modify_object(model):
                     self._skipped_tagged_objects.add((obj_type, obj_id))
+            except Exception as e:
+                exceptions.append(TagInvalidError(str(e)))
 
-            self._properties["objects_to_tag"] = (
-                set(objects_to_tag) - self._skipped_tagged_objects
-            )
+        self._properties["objects_to_tag"] = (
+            set(objects_to_tag) - self._skipped_tagged_objects
+        )
 
         if exceptions:
             raise TagInvalidError(exceptions=exceptions)

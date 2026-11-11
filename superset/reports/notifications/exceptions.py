@@ -24,6 +24,21 @@ class NotificationError(SupersetException):
     """
 
 
+class NotificationTransientError(NotificationError):
+    """Temporary third-party delivery failure surfaced as a report system error."""
+
+
+class SlackV1NotificationError(SupersetException):
+    """
+    Report should not be run with the slack v1 api
+    """
+
+    message = """Report should not be run with the Slack V1 api.
+    Attempting to run with V2 if required Slack scopes are available"""
+
+    status = 422
+
+
 class NotificationParamException(SupersetException):
     status = 422
 

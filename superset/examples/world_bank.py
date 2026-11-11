@@ -14,35 +14,36 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Loads datasets, dashboards and slices in a new superset instance"""
-
-import json
+import logging
 import os
 
 import pandas as pd
+from flask import current_app
 from sqlalchemy import DateTime, inspect, String
 from sqlalchemy.sql import column
 
 import superset.utils.database
-from superset import app, db
+from superset import db
 from superset.connectors.sqla.models import BaseDatasource, SqlMetric
 from superset.examples.helpers import (
-    get_example_url,
     get_examples_folder,
     get_slice_json,
     get_table_connector_registry,
     merge_slice,
     misc_dash_slices,
+    read_example_data,
     update_slice_ids,
 )
 from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
-from superset.sql_parse import Table
-from superset.utils import core as utils
+from superset.sql.parse import Table
+from superset.utils import core as utils, json
 from superset.utils.core import DatasourceType
 
+logger = logging.getLogger(__name__)
 
-def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals, too-many-statements
+
+def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals
     only_metadata: bool = False,
     force: bool = False,
     sample: bool = False,
@@ -55,8 +56,7 @@ def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals, too-many-s
         table_exists = database.has_table(Table(tbl_name, schema))
 
         if not only_metadata and (not table_exists or force):
-            url = get_example_url("countries.json.gz")
-            pdf = pd.read_json(url, compression="gzip")
+            pdf = read_example_data("examples://countries.json.gz", compression="gzip")
             pdf.columns = [col.replace(".", "_") for col in pdf.columns]
             if database.backend == "presto":
                 pdf.year = pd.to_datetime(pdf.year)
@@ -82,7 +82,7 @@ def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals, too-many-s
                 index=False,
             )
 
-    print("Creating table [wb_health_population] reference")
+    logger.debug("Creating table [wb_health_population] reference")
     table = get_table_connector_registry()
     tbl = db.session.query(table).filter_by(table_name=tbl_name).first()
     if not tbl:
@@ -107,11 +107,10 @@ def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals, too-many-s
         if not any(col.metric_name == metric for col in tbl.metrics):
             aggr_func = metric[:3]
             col = str(column(metric[5:]).compile(db.engine))
-            tbl.metrics.append(
-                SqlMetric(metric_name=metric, expression=f"{aggr_func}({col})")
-            )
+            metric_it = SqlMetric(metric_name=metric, expression=f"{aggr_func}({col})")
+            db.session.add(metric_it)
+            tbl.metrics.append(metric_it)
 
-    db.session.commit()
     tbl.fetch_metadata()
 
     slices = create_slices(tbl)
@@ -119,7 +118,7 @@ def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals, too-many-s
     for slc in slices:
         merge_slice(slc)
 
-    print("Creating a World's Health Bank dashboard")
+    logger.debug("Creating a World's Health Bank dashboard")
     dash_name = "World Bank's Data"
     slug = "world_health"
     dash = db.session.query(Dashboard).filter_by(slug=slug).first()
@@ -135,7 +134,6 @@ def load_world_bank_health_n_pop(  # pylint: disable=too-many-locals, too-many-s
     dash.position_json = json.dumps(pos, indent=4)
     dash.slug = slug
     dash.slices = slices
-    db.session.commit()
 
 
 def create_slices(tbl: BaseDatasource) -> list[Slice]:
@@ -152,13 +150,12 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
         "hasCustomLabel": True,
         "label": "Rural Population",
     }
-    defaults = {
+    shared_defaults = {
         "compare_lag": "10",
         "compare_suffix": "o10Y",
         "limit": "25",
-        "granularity_sqla": "year",
         "groupby": [],
-        "row_limit": app.config["ROW_LIMIT"],
+        "row_limit": current_app.config["ROW_LIMIT"],
         "since": "2014-01-01",
         "until": "2014-01-02",
         "time_range": "2014-01-01 : 2014-01-02",
@@ -167,6 +164,8 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
         "entity": "country_code",
         "show_bubbles": True,
     }
+    non_echarts_defaults = {**shared_defaults, "granularity": "year"}
+    echarts_x_axis_defaults = {**shared_defaults, "x_axis": "year"}
 
     return [
         Slice(
@@ -175,7 +174,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 since="2000",
                 viz_type="big_number",
                 compare_lag="10",
@@ -189,7 +188,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="table",
                 metrics=["sum__SP_POP_TOTL"],
                 groupby=["country_name"],
@@ -197,12 +196,12 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
         ),
         Slice(
             slice_name="Growth Rate",
-            viz_type="line",
+            viz_type="echarts_timeseries_line",
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
-                viz_type="line",
+                echarts_x_axis_defaults,
+                viz_type="echarts_timeseries_line",
                 since="1960-01-01",
                 metrics=["sum__SP_POP_TOTL"],
                 num_period_compare="10",
@@ -215,7 +214,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="world_map",
                 metric="sum__SP_RUR_TOTL_ZS",
                 num_period_compare="10",
@@ -224,16 +223,16 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
         ),
         Slice(
             slice_name="Life Expectancy VS Rural %",
-            viz_type="bubble",
+            viz_type="bubble_v2",
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
-                viz_type="bubble",
+                non_echarts_defaults,
+                viz_type="bubble_v2",
                 since="2011-01-01",
                 until="2011-01-02",
                 series="region",
-                limit=0,
+                row_limit=0,
                 entity="country_name",
                 x="sum__SP_RUR_TOTL_ZS",
                 y="sum__SP_DYN_LE00_IN",
@@ -272,7 +271,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="sunburst_v2",
                 columns=["region", "country_name"],
                 since="2011-01-01",
@@ -283,14 +282,14 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
         ),
         Slice(
             slice_name="World's Pop Growth",
-            viz_type="area",
+            viz_type="echarts_area",
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                echarts_x_axis_defaults,
                 since="1960-01-01",
                 until="now",
-                viz_type="area",
+                viz_type="echarts_area",
                 groupby=["region"],
                 metrics=metrics,
             ),
@@ -301,7 +300,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 since="1960-01-01",
                 until="now",
                 whisker_options="Min/max (no outliers)",
@@ -317,7 +316,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 since="1960-01-01",
                 until="now",
                 viz_type="treemap_v2",
@@ -331,7 +330,7 @@ def create_slices(tbl: BaseDatasource) -> list[Slice]:
             datasource_type=DatasourceType.TABLE,
             datasource_id=tbl.id,
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 since="2011-01-01",
                 until="2012-01-01",
                 viz_type="para",

@@ -17,31 +17,41 @@
  * under the License.
  */
 
-import React from 'react';
-import { SupersetError } from '@superset-ui/core';
-import { useChartOwnerNames } from 'src/hooks/apiResources';
-import ErrorMessageWithStackTrace from 'src/components/ErrorMessage/ErrorMessageWithStackTrace';
+import { t } from '@apache-superset/core/translation';
+import { ClientErrorObject, SupersetError } from '@superset-ui/core';
+import { FC } from 'react';
+import { useChartEditorNames } from 'src/hooks/apiResources';
+import { ErrorMessageWithStackTrace } from 'src/components';
+import { ChartSource } from 'src/types/ChartSource';
 
-interface Props {
-  chartId: string;
+export type Props = {
+  chartId: number;
   error?: SupersetError;
-}
+  subtitle: React.ReactNode;
+  link?: string;
+  source: ChartSource;
+  stackTrace?: string;
+} & Omit<ClientErrorObject, 'error'>;
 
-/**
- * fetches the chart owners and adds them to the extra data of the error message
- */
-export const ChartErrorMessage: React.FC<Props> = ({
-  chartId,
-  error,
-  ...props
-}) => {
-  const { result: owners } = useChartOwnerNames(chartId);
+const DEFAULT_CHART_ERROR_DETAIL = t('Data error');
+const DEFAULT_CHART_ERROR = t('Error: %s', DEFAULT_CHART_ERROR_DETAIL);
+
+export const ChartErrorMessage: FC<Props> = ({ chartId, error, ...props }) => {
+  // fetches the chart editors and adds them to the extra data of the error message
+  const { result: editors } = useChartEditorNames(chartId);
 
   // don't mutate props
   const ownedError = error && {
     ...error,
-    extra: { ...error.extra, owners },
+    extra: { ...error.extra, editors },
   };
 
-  return <ErrorMessageWithStackTrace {...props} error={ownedError} />;
+  return (
+    <ErrorMessageWithStackTrace
+      {...props}
+      error={ownedError}
+      title={DEFAULT_CHART_ERROR}
+      closable={false}
+    />
+  );
 };

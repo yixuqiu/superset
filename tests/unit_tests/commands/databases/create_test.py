@@ -21,15 +21,16 @@ import pytest
 from pytest_mock import MockerFixture
 
 from superset.commands.database.create import CreateDatabaseCommand
+from superset.commands.database.exceptions import MissingOAuth2TokenError
+from superset.exceptions import OAuth2RedirectError
 from superset.extensions import security_manager
 
 
-@pytest.fixture()
+@pytest.fixture
 def database_with_catalog(mocker: MockerFixture) -> MagicMock:
     """
     Mock a database with catalogs and schemas.
     """
-    mocker.patch("superset.commands.database.create.db")
     mocker.patch("superset.commands.database.create.TestConnectionDatabaseCommand")
 
     database = mocker.MagicMock()
@@ -42,18 +43,17 @@ def database_with_catalog(mocker: MockerFixture) -> MagicMock:
         {"schema3", "schema4"},
     ]
 
-    DatabaseDAO = mocker.patch("superset.commands.database.create.DatabaseDAO")
+    DatabaseDAO = mocker.patch("superset.commands.database.create.DatabaseDAO")  # noqa: N806
     DatabaseDAO.create.return_value = database
 
     return database
 
 
-@pytest.fixture()
+@pytest.fixture
 def database_without_catalog(mocker: MockerFixture) -> MagicMock:
     """
     Mock a database without catalogs.
     """
-    mocker.patch("superset.commands.database.create.db")
     mocker.patch("superset.commands.database.create.TestConnectionDatabaseCommand")
 
     database = mocker.MagicMock()
@@ -62,7 +62,7 @@ def database_without_catalog(mocker: MockerFixture) -> MagicMock:
     database.db_engine_spec.supports_catalog = False
     database.get_all_schema_names.return_value = ["schema1", "schema2"]
 
-    DatabaseDAO = mocker.patch("superset.commands.database.create.DatabaseDAO")
+    DatabaseDAO = mocker.patch("superset.commands.database.create.DatabaseDAO")  # noqa: N806
     DatabaseDAO.create.return_value = database
 
     return database
@@ -126,3 +126,66 @@ def test_create_permissions_without_catalog(
         ],
         any_order=True,
     )
+
+
+def test_create_with_oauth2(
+    mocker: MockerFixture,
+    database_without_catalog: MockerFixture,
+) -> None:
+    """
+    Test that the database can be created even if OAuth2 is needed to connect.
+    """
+    TestConnectionDatabaseCommand = mocker.patch(  # noqa: N806
+        "superset.commands.database.create.TestConnectionDatabaseCommand"
+    )
+    TestConnectionDatabaseCommand().run.side_effect = OAuth2RedirectError(
+        "url",
+        "tab_id",
+        "redirect_uri",
+    )
+    add_permission_view_menu = mocker.patch.object(
+        security_manager,
+        "add_permission_view_menu",
+    )
+
+    CreateDatabaseCommand(
+        {
+            "database_name": "test_database",
+            "sqlalchemy_uri": "sqlite://",
+        }
+    ).run()
+
+    add_permission_view_menu.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OAuth2RedirectError("url", "tab_id", "redirect_uri"),
+        MissingOAuth2TokenError(),
+    ],
+)
+def test_create_succeeds_when_permission_sync_needs_oauth2(
+    mocker: MockerFixture,
+    database_with_catalog: MagicMock,
+    error: Exception,
+) -> None:
+    """
+    A valid create is not reported as failed when only the permission sync needs
+    the creating admin's OAuth2 token (sc-126623).
+
+    The connection test passes on the connection's own settings; listing catalogs
+    runs through impersonation as the admin, who has no token yet. Reporting a 422
+    left the row committed behind it anyway.
+    """
+    database_with_catalog.get_all_catalog_names.side_effect = error
+
+    database = CreateDatabaseCommand(
+        {
+            "database_name": "test_database",
+            "sqlalchemy_uri": "sqlite://",
+            "impersonate_user": True,
+        }
+    ).run()
+
+    assert database is database_with_catalog

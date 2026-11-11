@@ -18,50 +18,69 @@
  */
 import {
   buildQueryContext,
-  getComparisonInfo,
-  ComparisonTimeRangeType,
   QueryFormData,
+  PostProcessingRule,
+  ensureIsArray,
 } from '@superset-ui/core';
+import {
+  isTimeComparison,
+  timeCompareOperator,
+} from '@superset-ui/chart-controls';
+import { isEmpty } from 'lodash-es';
 
 export default function buildQuery(formData: QueryFormData) {
-  const {
-    cols: groupby,
-    time_comparison: timeComparison,
-    extra_form_data: extraFormData,
-  } = formData;
+  const { cols: groupby, extra_form_data } = formData;
 
-  const queryContextA = buildQueryContext(formData, baseQueryObject => [
-    {
-      ...baseQueryObject,
-      groupby,
-    },
-  ]);
+  const queryContextA = buildQueryContext(formData, baseQueryObject => {
+    const postProcessing: PostProcessingRule[] = [];
+    postProcessing.push(timeCompareOperator(formData, baseQueryObject));
 
-  const comparisonFormData = getComparisonInfo(
-    formData,
-    timeComparison,
-    extraFormData,
-  );
+    const nonCustomNorInheritShifts = ensureIsArray(
+      formData.time_compare,
+    ).filter((shift: string) => shift !== 'custom' && shift !== 'inherit');
+    const customOrInheritShifts = ensureIsArray(formData.time_compare).filter(
+      (shift: string) => shift === 'custom' || shift === 'inherit',
+    );
 
-  const queryContextB = buildQueryContext(
-    comparisonFormData,
-    baseQueryObject => [
+    let timeOffsets: string[] = [];
+
+    // Shifts for non-custom or non inherit time comparison
+    if (!isEmpty(nonCustomNorInheritShifts)) {
+      timeOffsets = nonCustomNorInheritShifts;
+    }
+
+    // Shifts for custom or inherit time comparison
+    if (!isEmpty(customOrInheritShifts)) {
+      if (customOrInheritShifts.includes('custom')) {
+        timeOffsets = timeOffsets.concat([formData.start_date_offset]);
+      }
+      if (customOrInheritShifts.includes('inherit')) {
+        timeOffsets = timeOffsets.concat(['inherit']);
+      }
+    }
+
+    if (
+      extra_form_data?.time_compare &&
+      !timeOffsets.includes(extra_form_data.time_compare)
+    ) {
+      timeOffsets = [extra_form_data.time_compare];
+    }
+
+    return [
       {
         ...baseQueryObject,
         groupby,
-        extras: {
-          ...baseQueryObject.extras,
-          instant_time_comparison_range:
-            timeComparison !== ComparisonTimeRangeType.Custom
-              ? timeComparison
-              : undefined,
-        },
+        post_processing: postProcessing,
+        time_offsets:
+          isTimeComparison(formData, baseQueryObject) ||
+          extra_form_data?.time_compare
+            ? ensureIsArray(timeOffsets)
+            : [],
       },
-    ],
-  );
+    ];
+  });
 
   return {
     ...queryContextA,
-    queries: [...queryContextA.queries, ...queryContextB.queries],
   };
 }

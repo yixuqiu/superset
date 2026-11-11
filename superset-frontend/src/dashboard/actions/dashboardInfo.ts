@@ -17,13 +17,12 @@
  * under the License.
  */
 import { Dispatch } from 'redux';
+import { t } from '@apache-superset/core/translation';
 import {
+  DatasourceType,
   makeApi,
-  CategoricalColorNamespace,
-  t,
-  getErrorText,
+  getClientErrorObject,
 } from '@superset-ui/core';
-import { isString } from 'lodash';
 import { addDangerToast } from 'src/components/MessageToasts/actions';
 import {
   ChartConfiguration,
@@ -34,43 +33,125 @@ import {
 } from 'src/dashboard/types';
 import { onSave } from './dashboardState';
 
-export const DASHBOARD_INFO_UPDATED = 'DASHBOARD_INFO_UPDATED';
-
-export function updateColorSchema(
-  metadata: Record<string, any>,
-  labelColors: Record<string, string>,
-) {
-  const categoricalNamespace = CategoricalColorNamespace.getNamespace(
-    metadata?.color_namespace,
-  );
-  const colorMap = isString(labelColors)
-    ? JSON.parse(labelColors)
-    : labelColors;
-  Object.keys(colorMap).forEach(label => {
-    categoricalNamespace.setColor(label, colorMap[label]);
+const createUpdateDashboardApi = (id: number) =>
+  makeApi<
+    Partial<DashboardInfo>,
+    { result: Partial<DashboardInfo>; last_modified_time: number }
+  >({
+    method: 'PUT',
+    endpoint: `/api/v1/dashboard/${id}`,
   });
+
+export const DASHBOARD_SAVE_SUCCEEDED = 'DASHBOARD_SAVE_SUCCEEDED';
+
+export function dashboardSaveSucceeded(dashboardId: number) {
+  return { type: DASHBOARD_SAVE_SUCCEEDED, dashboardId };
+}
+
+export const DASHBOARD_INFO_UPDATED = 'DASHBOARD_INFO_UPDATED';
+export const DASHBOARD_INFO_FILTERS_CHANGED = 'DASHBOARD_INFO_FILTERS_CHANGED';
+export const REPLACE_DASHBOARD_SEMANTIC_DATASETS =
+  'REPLACE_DASHBOARD_SEMANTIC_DATASETS';
+export const UPDATE_DASHBOARD_SEMANTIC_DATASET =
+  'UPDATE_DASHBOARD_SEMANTIC_DATASET';
+
+type SemanticDataset = NonNullable<
+  DashboardInfo['semanticDatasets']
+>['datasets'][number];
+
+const SEMANTIC_SOURCE_KEY_RE = new RegExp(
+  `^([1-9]\\d*)__${DatasourceType.SemanticView}$`,
+);
+
+export function provenSemanticDataset(
+  value: unknown,
+  sourceKey: string,
+): SemanticDataset | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<SemanticDataset> & { id?: number };
+  const sourceId = SEMANTIC_SOURCE_KEY_RE.exec(sourceKey)?.[1];
+  if (
+    !sourceId ||
+    candidate.type !== DatasourceType.SemanticView ||
+    !Array.isArray(candidate.columns) ||
+    !candidate.columns.every(
+      (column: unknown) =>
+        column !== null &&
+        typeof column === 'object' &&
+        'column_name' in column &&
+        typeof column.column_name === 'string',
+    ) ||
+    (candidate.id !== undefined && candidate.id !== Number(sourceId)) ||
+    (candidate.uid !== sourceKey && candidate.id === undefined)
+  ) {
+    return null;
+  }
+  // The metadata endpoint uses provider identity for uid; dashboard charts
+  // use the integer datasource key. A matching id proves this normalization.
+  return { ...candidate, uid: sourceKey } as SemanticDataset;
+}
+
+export function provenSemanticDatasets(
+  value: unknown,
+): SemanticDataset[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map((candidate: unknown) => {
+      if (
+        !candidate ||
+        typeof candidate !== 'object' ||
+        !('uid' in candidate)
+      ) {
+        return null;
+      }
+      return provenSemanticDataset(candidate, String(candidate.uid));
+    })
+    .filter((candidate): candidate is SemanticDataset => candidate !== null);
+}
+
+export function replaceDashboardSemanticDatasets(
+  dashboardId: number,
+  datasets: SemanticDataset[] | null,
+  requestId?: string,
+  isRefreshStart = false,
+  expectedGeneration?: number,
+) {
+  return {
+    type: REPLACE_DASHBOARD_SEMANTIC_DATASETS,
+    dashboardId,
+    datasets,
+    requestId,
+    isRefreshStart,
+    expectedGeneration,
+  };
+}
+
+export function updateDashboardSemanticDataset(
+  dashboardId: number,
+  sourceKey: string,
+  dataset: SemanticDataset | null,
+  requestId?: string,
+  isRefreshStart = false,
+) {
+  return {
+    type: UPDATE_DASHBOARD_SEMANTIC_DATASET,
+    dashboardId,
+    sourceKey,
+    dataset,
+    requestId,
+    isRefreshStart,
+  };
 }
 
 // updates partially changed dashboard info
-export function dashboardInfoChanged(newInfo: { metadata: any }) {
-  const { metadata } = newInfo;
-
-  const categoricalNamespace = CategoricalColorNamespace.getNamespace(
-    metadata?.color_namespace,
-  );
-
-  categoricalNamespace.resetColors();
-
-  if (metadata?.shared_label_colors) {
-    updateColorSchema(metadata, metadata?.shared_label_colors);
-  }
-
-  if (metadata?.label_colors) {
-    updateColorSchema(metadata, metadata?.label_colors);
-  }
-
+export function dashboardInfoChanged(newInfo: Partial<DashboardInfo>) {
   return { type: DASHBOARD_INFO_UPDATED, newInfo };
 }
+
+export function nativeFiltersConfigChanged(newInfo: Record<string, any>) {
+  return { type: DASHBOARD_INFO_FILTERS_CHANGED, newInfo };
+}
+
 export const SAVE_CHART_CONFIG_BEGIN = 'SAVE_CHART_CONFIG_BEGIN';
 export const SAVE_CHART_CONFIG_COMPLETE = 'SAVE_CHART_CONFIG_COMPLETE';
 export const SAVE_CHART_CONFIG_FAIL = 'SAVE_CHART_CONFIG_FAIL';
@@ -91,14 +172,7 @@ export const saveChartConfiguration =
     });
     const { id, metadata } = getState().dashboardInfo;
 
-    // TODO extract this out when makeApi supports url parameters
-    const updateDashboard = makeApi<
-      Partial<DashboardInfo>,
-      { result: DashboardInfo }
-    >({
-      method: 'PUT',
-      endpoint: `/api/v1/dashboard/${id}`,
-    });
+    const updateDashboard = createUpdateDashboardApi(id);
 
     try {
       const response = await updateDashboard({
@@ -112,7 +186,7 @@ export const saveChartConfiguration =
       });
       dispatch(
         dashboardInfoChanged({
-          metadata: JSON.parse(response.result.json_metadata),
+          metadata: JSON.parse(response.result.json_metadata || '{}'),
         }),
       );
       dispatch({
@@ -120,6 +194,7 @@ export const saveChartConfiguration =
         chartConfiguration,
         globalChartConfiguration,
       });
+      dispatch(dashboardSaveSucceeded(id));
     } catch (err) {
       dispatch({
         type: SAVE_CHART_CONFIG_FAIL,
@@ -147,13 +222,7 @@ export function setCrossFiltersEnabled(crossFiltersEnabled: boolean) {
 export function saveFilterBarOrientation(orientation: FilterBarOrientation) {
   return async (dispatch: Dispatch, getState: () => RootState) => {
     const { id, metadata } = getState().dashboardInfo;
-    const updateDashboard = makeApi<
-      Partial<DashboardInfo>,
-      { result: Partial<DashboardInfo>; last_modified_time: number }
-    >({
-      method: 'PUT',
-      endpoint: `/api/v1/dashboard/${id}`,
-    });
+    const updateDashboard = createUpdateDashboardApi(id);
     try {
       const response = await updateDashboard({
         json_metadata: JSON.stringify({
@@ -173,23 +242,33 @@ export function saveFilterBarOrientation(orientation: FilterBarOrientation) {
         dispatch(onSave(lastModifiedTime));
       }
     } catch (errorObject) {
-      const errorText = await getErrorText(errorObject, 'dashboard');
-      dispatch(addDangerToast(errorText));
+      const { error } = await getClientErrorObject(errorObject);
+      dispatch(
+        addDangerToast(
+          t(
+            'Sorry, there was an error saving this dashboard: %s',
+            error || 'Bad Request',
+          ),
+        ),
+      );
       throw errorObject;
     }
   };
 }
 
 export function saveCrossFiltersSetting(crossFiltersEnabled: boolean) {
-  return async (dispatch: Dispatch, getState: () => RootState) => {
+  return async function saveCrossFiltersSettingThunk(
+    dispatch: Dispatch,
+    getState: () => RootState,
+  ) {
     const { id, metadata } = getState().dashboardInfo;
-    const updateDashboard = makeApi<
-      Partial<DashboardInfo>,
-      { result: Partial<DashboardInfo>; last_modified_time: number }
-    >({
-      method: 'PUT',
-      endpoint: `/api/v1/dashboard/${id}`,
-    });
+
+    const previousCrossFiltersEnabled =
+      getState().dashboardInfo.crossFiltersEnabled;
+
+    dispatch(setCrossFiltersEnabled(crossFiltersEnabled));
+    const updateDashboard = createUpdateDashboardApi(id);
+
     try {
       const response = await updateDashboard({
         json_metadata: JSON.stringify({
@@ -197,19 +276,29 @@ export function saveCrossFiltersSetting(crossFiltersEnabled: boolean) {
           cross_filters_enabled: crossFiltersEnabled,
         }),
       });
+
       const updatedDashboard = response.result;
       const lastModifiedTime = response.last_modified_time;
+
       if (updatedDashboard.json_metadata) {
         const metadata = JSON.parse(updatedDashboard.json_metadata);
         dispatch(setCrossFiltersEnabled(metadata.cross_filters_enabled));
       }
+
       if (lastModifiedTime) {
         dispatch(onSave(lastModifiedTime));
       }
-    } catch (errorObject) {
-      const errorText = await getErrorText(errorObject, 'dashboard');
-      dispatch(addDangerToast(errorText));
-      throw errorObject;
+
+      dispatch(
+        dashboardInfoChanged({
+          metadata: JSON.parse(response.result.json_metadata || '{}'),
+        }),
+      );
+      return response;
+    } catch (err) {
+      dispatch(setCrossFiltersEnabled(previousCrossFiltersEnabled));
+      dispatch(addDangerToast(t('Failed to save cross-filters setting')));
+      throw err;
     }
   };
 }

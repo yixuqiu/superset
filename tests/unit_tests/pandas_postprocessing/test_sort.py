@@ -34,10 +34,10 @@ def test_sort():
     assert df.index[0] == "person99"
 
     df = sort(df=categories_df.set_index("name"), by="asc_idx")
-    assert df["asc_idx"][0] == 0
+    assert df["asc_idx"].iloc[0] == 0
 
     df = sort(df=categories_df.set_index("name"), by="asc_idx", ascending=False)
-    assert df["asc_idx"][0] == 100
+    assert df["asc_idx"].iloc[0] == 100
 
     df = sort(df=timeseries_df, is_sort_index=True)
     assert df.index[0] == parse("2019-01-01")
@@ -48,6 +48,6 @@ def test_sort():
     df = sort(df=timeseries_df)
     assert df.equals(timeseries_df)
 
-    with pytest.raises(InvalidPostProcessingError):
+    with pytest.raises(InvalidPostProcessingError):  # noqa: PT012
         sort(df=df, by="abc", ascending=False)
         sort(df=df, by=["abc", "def"])

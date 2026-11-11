@@ -14,31 +14,35 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-import json
+import logging
 import textwrap
 from typing import Union
 
 import pandas as pd
+from flask import current_app
 from sqlalchemy import DateTime, inspect, String
 from sqlalchemy.sql import column
 
-from superset import app, db
+from superset import db, security_manager
 from superset.connectors.sqla.models import SqlaTable, SqlMetric, TableColumn
 from superset.models.core import Database
 from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
-from superset.sql_parse import Table
+from superset.sql.parse import Table
+from superset.utils import json
 from superset.utils.core import DatasourceType
 
-from ..utils.database import get_example_database
+from ..utils.database import get_example_database  # noqa: TID252
 from .helpers import (
-    get_example_url,
     get_slice_json,
     get_table_connector_registry,
     merge_slice,
     misc_dash_slices,
+    read_example_data,
     update_slice_ids,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def gen_filter(
@@ -54,8 +58,8 @@ def gen_filter(
 
 
 def load_data(tbl_name: str, database: Database, sample: bool = False) -> None:
-    url = get_example_url("birth_names2.json.gz")
-    pdf = pd.read_json(url, compression="gzip")
+    pdf = read_example_data("examples://birth_names2.json.gz", compression="gzip")
+
     # TODO(bkyryliuk): move load examples data into the pytest fixture
     if database.backend == "presto":
         pdf.ds = pd.to_datetime(pdf.ds, unit="ms")
@@ -83,8 +87,8 @@ def load_data(tbl_name: str, database: Database, sample: bool = False) -> None:
             method="multi",
             index=False,
         )
-    print("Done loading table!")
-    print("-" * 80)
+    logger.debug("Done loading table!")
+    logger.debug("-" * 80)
 
 
 def load_birth_names(
@@ -104,14 +108,12 @@ def load_birth_names(
     table = get_table_connector_registry()
     obj = db.session.query(table).filter_by(table_name=tbl_name, schema=schema).first()
     if not obj:
-        print(f"Creating table [{tbl_name}] reference")
+        logger.debug("Creating table [%s] reference", tbl_name)
         obj = table(table_name=tbl_name, schema=schema)
         db.session.add(obj)
 
     _set_table_metadata(obj, database)
     _add_table_metrics(obj)
-
-    db.session.commit()
 
     slices, _ = create_slices(obj)
     create_dashboard(slices)
@@ -133,16 +135,18 @@ def _add_table_metrics(datasource: SqlaTable) -> None:
     if not any(col.column_name == "num_california" for col in columns):
         col_state = str(column("state").compile(db.engine))
         col_num = str(column("num").compile(db.engine))
-        columns.append(
-            TableColumn(
-                column_name="num_california",
-                expression=f"CASE WHEN {col_state} = 'CA' THEN {col_num} ELSE 0 END",
-            )
+        column_it = TableColumn(
+            column_name="num_california",
+            expression="CASE WHEN %s = 'CA' THEN %s ELSE 0 END" % (col_state, col_num),
         )
+        db.session.add(column_it)
+        columns.append(column_it)
 
     if not any(col.metric_name == "sum__num" for col in metrics):
         col = str(column("num").compile(db.engine))
-        metrics.append(SqlMetric(metric_name="sum__num", expression=f"SUM({col})"))
+        metric = SqlMetric(metric_name="sum__num", expression="SUM(%s)" % col)
+        db.session.add(metric)
+        metrics.append(metric)
 
     for col in columns:
         if col.column_name == "ds":  # type: ignore
@@ -154,6 +158,9 @@ def _add_table_metrics(datasource: SqlaTable) -> None:
 
 
 def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
+    from superset.subjects.utils import get_user_subject
+
+    owner = security_manager.get_user_by_id(1)
     metrics = [
         {
             "expressionType": "SIMPLE",
@@ -165,17 +172,18 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
     ]
     metric = "sum__num"
 
-    defaults = {
+    shared_defaults = {
         "compare_lag": "10",
         "compare_suffix": "o10Y",
         "limit": "25",
-        "granularity_sqla": "ds",
         "groupby": [],
-        "row_limit": app.config["ROW_LIMIT"],
+        "row_limit": current_app.config["ROW_LIMIT"],
         "time_range": "100 years ago : now",
         "viz_type": "table",
         "markup_type": "markdown",
     }
+    non_echarts_defaults = {**shared_defaults, "granularity": "ds"}
+    echarts_x_axis_defaults = {**shared_defaults, "x_axis": "ds"}
 
     default_query_context = {
         "result_format": "json",
@@ -195,52 +203,56 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
     slice_kwargs = {
         "datasource_id": tbl.id,
         "datasource_type": DatasourceType.TABLE,
-        "owners": [],
     }
 
-    print("Creating some slices")
+    logger.debug("Creating some slices")
     slices = [
         Slice(
             **slice_kwargs,
             slice_name="Participants",
             viz_type="big_number",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="big_number",
-                granularity_sqla="ds",
+                granularity="ds",
                 compare_lag="5",
                 compare_suffix="over 5Y",
                 metric=metric,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Genders",
             viz_type="pie",
             params=get_slice_json(
-                defaults, viz_type="pie", groupby=["gender"], metric=metric
+                non_echarts_defaults,
+                viz_type="pie",
+                groupby=["gender"],
+                metric=metric,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Trends",
-            viz_type="line",
+            viz_type="echarts_timeseries_line",
             params=get_slice_json(
-                defaults,
-                viz_type="line",
+                echarts_x_axis_defaults,
+                viz_type="echarts_timeseries_line",
                 groupby=["name"],
-                granularity_sqla="ds",
                 rich_tooltip=True,
                 show_legend=True,
                 metrics=metrics,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Genders by State",
-            viz_type="dist_bar",
+            viz_type="echarts_timeseries_bar",
             params=get_slice_json(
-                defaults,
+                echarts_x_axis_defaults,
                 adhoc_filters=[
                     {
                         "clause": "WHERE",
@@ -251,7 +263,7 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                         "subject": "state",
                     }
                 ],
-                viz_type="dist_bar",
+                viz_type="echarts_timeseries_bar",
                 metrics=[
                     {
                         "expressionType": "SIMPLE",
@@ -270,26 +282,28 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                 ],
                 groupby=["state"],
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Girls",
             viz_type="table",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 groupby=["name"],
                 adhoc_filters=[gen_filter("gender", "girl")],
                 row_limit=50,
-                timeseries_limit_metric=metric,
+                series_limit_metric=metric,
                 metrics=[metric],
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Girl Name Cloud",
             viz_type="word_cloud",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="word_cloud",
                 size_from="10",
                 series="name",
@@ -299,26 +313,28 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                 adhoc_filters=[gen_filter("gender", "girl")],
                 metric=metric,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Boys",
             viz_type="table",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 groupby=["name"],
                 adhoc_filters=[gen_filter("gender", "boy")],
                 row_limit=50,
-                timeseries_limit_metric=metric,
+                series_limit_metric=metric,
                 metrics=[metric],
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Boy Name Cloud",
             viz_type="word_cloud",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="word_cloud",
                 size_from="10",
                 series="name",
@@ -328,47 +344,50 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                 adhoc_filters=[gen_filter("gender", "boy")],
                 metric=metric,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Top 10 Girl Name Share",
-            viz_type="area",
+            viz_type="echarts_area",
             params=get_slice_json(
-                defaults,
+                echarts_x_axis_defaults,
                 adhoc_filters=[gen_filter("gender", "girl")],
                 comparison_type="values",
                 groupby=["name"],
                 limit=10,
                 stacked_style="expand",
                 time_grain_sqla="P1D",
-                viz_type="area",
-                x_axis_forma="smart_date",
+                viz_type="echarts_area",
+                x_axis_time_format="smart_date",
                 metrics=metrics,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Top 10 Boy Name Share",
-            viz_type="area",
+            viz_type="echarts_area",
             params=get_slice_json(
-                defaults,
+                echarts_x_axis_defaults,
                 adhoc_filters=[gen_filter("gender", "boy")],
                 comparison_type="values",
                 groupby=["name"],
                 limit=10,
                 stacked_style="expand",
                 time_grain_sqla="P1D",
-                viz_type="area",
-                x_axis_forma="smart_date",
+                viz_type="echarts_area",
+                x_axis_time_format="smart_date",
                 metrics=metrics,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Pivot Table v2",
             viz_type="pivot_table_v2",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="pivot_table_v2",
                 groupbyRows=["name"],
                 groupbyColumns=["state"],
@@ -383,6 +402,7 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                     }
                 ],
             ),
+            editors=[],
         ),
     ]
     misc_slices = [
@@ -391,7 +411,7 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
             slice_name="Average and Sum Trends",
             viz_type="mixed_timeseries",
             params=get_slice_json(
-                defaults,
+                echarts_x_axis_defaults,
                 viz_type="mixed_timeseries",
                 metrics=[
                     {
@@ -403,23 +423,28 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                     }
                 ],
                 metrics_b=["sum__num"],
-                granularity_sqla="ds",
                 yAxisIndex=0,
                 yAxisIndexB=1,
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Num Births Trend",
-            viz_type="line",
-            params=get_slice_json(defaults, viz_type="line", metrics=metrics),
+            viz_type="echarts_timeseries_line",
+            params=get_slice_json(
+                echarts_x_axis_defaults,
+                viz_type="echarts_timeseries_line",
+                metrics=metrics,
+            ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Daily Totals",
             viz_type="table",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 groupby=["ds"],
                 time_range="1983 : 2023",
                 viz_type="table",
@@ -435,13 +460,14 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                     }
                 ],
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Number of California Births",
             viz_type="big_number_total",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 metric={
                     "expressionType": "SIMPLE",
                     "column": {
@@ -452,15 +478,16 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                     "label": "SUM(num_california)",
                 },
                 viz_type="big_number_total",
-                granularity_sqla="ds",
+                granularity="ds",
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Top 10 California Names Timeseries",
-            viz_type="line",
+            viz_type="echarts_timeseries_line",
             params=get_slice_json(
-                defaults,
+                echarts_x_axis_defaults,
                 metrics=[
                     {
                         "expressionType": "SIMPLE",
@@ -472,10 +499,9 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                         "label": "SUM(num_california)",
                     }
                 ],
-                viz_type="line",
-                granularity_sqla="ds",
+                viz_type="echarts_timeseries_line",
                 groupby=["name"],
-                timeseries_limit_metric={
+                series_limit_metric={
                     "expressionType": "SIMPLE",
                     "column": {
                         "column_name": "num_california",
@@ -486,17 +512,20 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                 },
                 limit="10",
             ),
+            editors=[get_user_subject(owner.id)]
+            if owner and get_user_subject(owner.id)
+            else [],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Names Sorted by Num in California",
             viz_type="table",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 metrics=metrics,
                 groupby=["name"],
                 row_limit=50,
-                timeseries_limit_metric={
+                series_limit_metric={
                     "expressionType": "SIMPLE",
                     "column": {
                         "column_name": "num_california",
@@ -506,31 +535,34 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
                     "label": "SUM(num_california)",
                 },
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Number of Girls",
             viz_type="big_number_total",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 metric=metric,
                 viz_type="big_number_total",
-                granularity_sqla="ds",
+                granularity="ds",
                 adhoc_filters=[gen_filter("gender", "girl")],
                 subheader="total female participants",
             ),
+            editors=[],
         ),
         Slice(
             **slice_kwargs,
             slice_name="Pivot Table",
             viz_type="pivot_table_v2",
             params=get_slice_json(
-                defaults,
+                non_echarts_defaults,
                 viz_type="pivot_table_v2",
                 groupbyRows=["name"],
                 groupbyColumns=["state"],
                 metrics=metrics,
             ),
+            editors=[],
         ),
     ]
     for slc in slices:
@@ -544,7 +576,7 @@ def create_slices(tbl: SqlaTable) -> tuple[list[Slice], list[Slice]]:
 
 
 def create_dashboard(slices: list[Slice]) -> Dashboard:
-    print("Creating a dashboard")
+    logger.debug("Creating a dashboard")
     dash = db.session.query(Dashboard).filter_by(slug="births").first()
     if not dash:
         dash = Dashboard()
@@ -562,7 +594,6 @@ def create_dashboard(slices: list[Slice]) -> Dashboard:
         }
     }"""
     )
-    # pylint: disable=line-too-long
     pos = json.loads(
         textwrap.dedent(
             """\
@@ -834,15 +865,13 @@ def create_dashboard(slices: list[Slice]) -> Dashboard:
             "type": "ROW"
           }
         }
-        """
+        """  # noqa: E501
         )
     )
-    # pylint: enable=line-too-long
     # dashboard v2 doesn't allow add markup slice
     dash.slices = [slc for slc in slices if slc.viz_type != "markup"]
     update_slice_ids(pos)
     dash.dashboard_title = "USA Births Names"
-    dash.position_json = json.dumps(pos, indent=4)
+    dash.position_json = json.dumps(pos, indent=4)  # noqa: TID251
     dash.slug = "births"
-    db.session.commit()
     return dash

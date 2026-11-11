@@ -20,13 +20,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from flask import current_app
+from flask import current_app as app
 
+from superset import security_manager
+from superset.tasks.exceptions import ExecutorNotFoundError
 from superset.tasks.types import ExecutorType
 from superset.tasks.utils import get_current_user, get_executor
-from superset.utils.hashing import md5_sha_from_str
+from superset.utils.core import override_user
+from superset.utils.hashing import hash_from_str
 
 if TYPE_CHECKING:
+    from superset.connectors.sqla.models import BaseDatasource, SqlaTable
     from superset.models.dashboard import Dashboard
     from superset.models.slice import Slice
 
@@ -49,35 +53,112 @@ def _adjust_string_for_executor(
     return unique_string
 
 
-def get_dashboard_digest(dashboard: Dashboard) -> str:
-    config = current_app.config
-    executor_type, executor = get_executor(
-        executor_types=config["THUMBNAIL_EXECUTE_AS"],
-        model=dashboard,
-        current_user=get_current_user(),
+def _adjust_string_with_rls(
+    unique_string: str,
+    datasources: list[SqlaTable | None] | set[BaseDatasource],
+    executor: str,
+) -> str:
+    """
+    Add the RLS filters to the unique string based on current executor.
+    """
+
+    # Prefer the ambient guest user (the actual requesting principal) over a
+    # DB-user lookup by username: for guest requests `executor` is the
+    # token-supplied username, which can collide with a real DB username. If
+    # find_user() were tried first, a collision would compute RLS under the
+    # unrelated DB user's identity, and the token's own per-token rls claims
+    # (surfaced via get_guest_rls_filters(), which reads the ambient guest
+    # user installed by override_user() below) would never enter the digest --
+    # letting two guest tokens with the same username but different rls
+    # collide on one cache entry.
+    user = (
+        security_manager.get_current_guest_user_if_guest()
+        or security_manager.find_user(executor)
     )
-    if func := config["THUMBNAIL_DASHBOARD_DIGEST_FUNC"]:
+
+    if user:
+        stringified_rls = ""
+        with override_user(user):
+            # Prefetch RLS filters for all datasources in a single batch query
+            table_ids = [
+                datasource.id
+                for datasource in datasources
+                if datasource and getattr(datasource, "is_rls_supported", False)
+            ]
+            if table_ids:
+                security_manager.prefetch_rls_filters(table_ids)
+
+            for datasource in sorted(datasources, key=lambda d: d.id if d else -1):
+                if datasource and getattr(datasource, "is_rls_supported", False):
+                    rls_filters = datasource.get_sqla_row_level_filters()
+
+                    if len(rls_filters) > 0:
+                        stringified_rls += (
+                            f"{str(datasource.id)}\t"
+                            + "\t".join([str(f) for f in rls_filters])
+                            + "\n"
+                        )
+
+        if stringified_rls:
+            unique_string = f"{unique_string}\n{stringified_rls}"
+
+    return unique_string
+
+
+def _get_thumbnail_executor(
+    model: Dashboard | Slice,
+) -> tuple[ExecutorType, str] | None:
+    """
+    Resolve the thumbnail executor, keying an embedded guest on itself when
+    ``CURRENT_USER`` cannot resolve from its username (guest tokens may carry
+    an empty one), so the guest's row level rules still enter the digest.
+    """
+    executors = app.config["THUMBNAIL_EXECUTORS"]
+    try:
+        return get_executor(
+            executors=executors,
+            model=model,
+            current_user=get_current_user(),
+        )
+    except ExecutorNotFoundError:
+        if ExecutorType.CURRENT_USER in executors and (
+            guest := security_manager.get_current_guest_user_if_guest()
+        ):
+            return ExecutorType.CURRENT_USER, guest.username
+        return None
+
+
+def get_dashboard_digest(dashboard: Dashboard) -> str | None:
+    if not (chosen := _get_thumbnail_executor(dashboard)):
+        return None
+    executor_type, executor = chosen
+
+    if func := app.config["THUMBNAIL_DASHBOARD_DIGEST_FUNC"]:
         return func(dashboard, executor_type, executor)
 
     unique_string = (
-        f"{dashboard.id}\n{dashboard.charts}\n{dashboard.position_json}\n"
+        f"{dashboard.id}\n{sorted(dashboard.charts)}\n{dashboard.position_json}\n"
         f"{dashboard.css}\n{dashboard.json_metadata}"
     )
 
     unique_string = _adjust_string_for_executor(unique_string, executor_type, executor)
-    return md5_sha_from_str(unique_string)
-
-
-def get_chart_digest(chart: Slice) -> str:
-    config = current_app.config
-    executor_type, executor = get_executor(
-        executor_types=config["THUMBNAIL_EXECUTE_AS"],
-        model=chart,
-        current_user=get_current_user(),
+    unique_string = _adjust_string_with_rls(
+        unique_string, dashboard.datasources, executor
     )
-    if func := config["THUMBNAIL_CHART_DIGEST_FUNC"]:
+
+    return hash_from_str(unique_string)
+
+
+def get_chart_digest(chart: Slice) -> str | None:
+    if not (chosen := _get_thumbnail_executor(chart)):
+        return None
+    executor_type, executor = chosen
+
+    if func := app.config["THUMBNAIL_CHART_DIGEST_FUNC"]:
         return func(chart, executor_type, executor)
 
     unique_string = f"{chart.params or ''}.{executor}"
     unique_string = _adjust_string_for_executor(unique_string, executor_type, executor)
-    return md5_sha_from_str(unique_string)
+    unique_string = _adjust_string_with_rls(unique_string, [chart.table], executor)
+
+    return hash_from_str(unique_string)

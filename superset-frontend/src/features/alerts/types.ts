@@ -17,13 +17,19 @@
  * under the License.
  */
 
-import Owner from 'src/types/Owner';
+import type { ReactNode } from 'react';
 import { NotificationFormats } from 'src/features/reports/types';
+import type Subject from 'src/types/Subject';
 
 type user = {
   id: number;
   first_name: string;
   last_name: string;
+};
+
+/** A user selectable as the executor ("Run As") of an alert/report. */
+export type RunAsUser = user & {
+  email?: string;
 };
 export type ChartObject = {
   id: number;
@@ -41,25 +47,74 @@ export type DatabaseObject = {
   id: number;
 };
 
-export type NotificationMethodOption = 'Email' | 'Slack';
+export enum NotificationMethodOption {
+  Email = 'Email',
+  Slack = 'Slack',
+  SlackV2 = 'SlackV2',
+  Webhook = 'Webhook',
+}
+
+export type SelectValue = {
+  value: string;
+  label: string;
+};
 
 export type NotificationSetting = {
   method?: NotificationMethodOption;
   recipients: string;
+  cc?: string;
+  bcc?: string;
   options: NotificationMethodOption[];
+};
+
+export type SlackChannel = {
+  id: string;
+  name: string;
+  is_member: boolean;
+  is_private: boolean;
+};
+
+export type TabNode = {
+  title: string;
+  value: string;
+  children?: TabNode[];
 };
 
 export type Recipient = {
   recipient_config_json: {
     target: string;
+    ccTarget?: string;
+    bccTarget?: string;
   };
   type: NotificationMethodOption;
 };
 
 export type MetaObject = {
   id?: number;
-  label?: string;
+  label?: ReactNode;
   value?: number | string;
+  [key: string]: unknown;
+};
+
+export type DashboardState = {
+  activeTabs?: Array<string>;
+  dataMask?: object;
+  anchor?: string;
+  nativeFilters?: Array<ExtraNativeFilter>;
+};
+
+export type ExtraNativeFilter = {
+  filterName?: string;
+  filterType?: string;
+  columnName?: string;
+  columnLabel?: string;
+  filterValues?: Array<any> | [];
+  nativeFilterId?: string | null;
+  optionFilterValues?: Array<any> | [];
+};
+
+export type Extra = {
+  dashboard?: DashboardState;
 };
 
 export type Operator = '<' | '>' | '<=' | '>=' | '==' | '!=' | 'not null';
@@ -79,19 +134,32 @@ export type AlertObject = {
   dashboard_id?: number;
   database?: MetaObject;
   description?: string;
+  email_subject?: string;
   error?: string;
+  extra?: Extra;
   force_screenshot: boolean;
   grace_period?: number;
   id: number;
+  include_cta?: boolean;
   last_eval_dttm?: number;
-  last_state?: 'Success' | 'Working' | 'Error' | 'Not triggered' | 'On Grace';
+  last_state?:
+    | 'Success'
+    | 'Working'
+    | 'Error'
+    | 'Not triggered'
+    | 'On Grace'
+    | 'Retrying';
   log_retention?: number;
   name?: string;
-  owners?: Array<Owner | MetaObject>;
+  editors?: Subject[];
   sql?: string;
   timezone?: string;
   recipients?: Array<Recipient>;
-  report_format?: NotificationFormats;
+  report_format?: NotificationFormats | 'NONE';
+  run_as_type?: 'fixed_user' | null;
+  run_alert_query_as_type?: 'fixed_user' | null;
+  run_as?: RunAsUser | MetaObject | null;
+  run_alert_query_as?: RunAsUser | MetaObject | null;
   type?: string;
   validator_config_json?: {
     op?: Operator;
@@ -99,6 +167,11 @@ export type AlertObject = {
   };
   validator_type?: string;
   working_timeout?: number;
+  retry_on_failure?: boolean;
+  retry_max_attempts?: number;
+  send_failed_reports?: boolean;
+  retry_notify_owners?: boolean;
+  retry_notify_recipients?: boolean;
 };
 
 export type LogObject = {
@@ -118,16 +191,42 @@ export enum AlertState {
   Error = 'Error',
   Noop = 'Not triggered',
   Grace = 'On Grace',
+  Retrying = 'Retrying',
 }
 
 export enum RecipientIconName {
   Email = 'Email',
   Slack = 'Slack',
+  SlackV2 = 'SlackV2',
+  Webhook = 'Webhook',
 }
 export interface AlertsReportsConfig {
   ALERT_REPORTS_DEFAULT_WORKING_TIMEOUT: number;
   ALERT_REPORTS_DEFAULT_RETENTION: number;
   ALERT_REPORTS_DEFAULT_CRON_VALUE: string;
+  ALERT_REPORTS_RUN_AS_TOOLTIP: string | null;
+}
+
+/**
+ * Global Alerts & Reports configuration managed by admins at runtime
+ * (GET/PUT /api/v1/report/configuration/).
+ */
+export interface ReportConfiguration {
+  alerts_attach_reports: boolean | null;
+  date_format_in_email_subject: boolean | null;
+  alert_minimum_interval: number | null;
+  report_minimum_interval: number | null;
+  limit_recipients_to_users: boolean | null;
+  allowed_email_domains: string[] | null;
+}
+
+/** A schedule conflicting with a proposed global configuration. */
+export interface ImpactedSchedule {
+  id: number;
+  name: string;
+  type: string;
+  reason: 'recipient' | 'frequency';
+  detail: string;
 }
 
 export type SectionValidationObject = {
@@ -147,3 +246,48 @@ export enum Sections {
   Schedule = 'scheduleSection',
   Notification = 'notificationSection',
 }
+
+export enum ContentType {
+  Dashboard = 'dashboard',
+  Chart = 'chart',
+}
+
+export type NativeFilterObject = {
+  cascadeParentIds: any[];
+  chartsInScope: number[];
+  controlValues: {
+    defaultToFirstItem: boolean;
+    enableEmptyFilter: boolean;
+    inverseSelection: boolean;
+    multiSelect: boolean;
+    searchAllOptions: boolean;
+  };
+  defaultDataMask: {
+    extraFormData: Record<string, any>;
+    filterState: Record<string, any>;
+    ownState: Record<string, any>;
+  };
+  description: string;
+  filterType: string;
+  id: string;
+  name: string;
+  scope: {
+    excluded: any[];
+    rootPath: string[];
+  };
+  tabsInScope: string[];
+  adhoc_filters: any[];
+  targets: Array<{
+    column: {
+      name: string;
+    };
+    datasetId: number;
+  }>;
+  type: string;
+};
+
+export type DashboardTabsResponse = {
+  tab_tree: TabNode[];
+  all_tabs: Record<string, string>;
+  native_filters: Partial<Record<string, NativeFilterObject[]>>;
+};

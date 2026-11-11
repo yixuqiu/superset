@@ -17,6 +17,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { GenericDataType } from '@apache-superset/core/common';
 import { DatasourceType } from './Datasource';
 import { BinaryOperator, SetOperator, UnaryOperator } from './Operator';
 import { AppliedTimeExtras, TimeRange } from './Time';
@@ -31,7 +32,7 @@ import { Maybe } from '../../types';
 import { PostProcessingRule } from './PostProcessing';
 import { JsonObject } from '../../connection';
 import { TimeGranularity } from '../../time-format';
-import { GenericDataType } from './QueryResponse';
+import { DataRecordValue } from './QueryResponse';
 
 export type BaseQueryObjectFilterClause = {
   col: QueryFormColumn;
@@ -41,13 +42,13 @@ export type BaseQueryObjectFilterClause = {
 
 export type BinaryQueryObjectFilterClause = BaseQueryObjectFilterClause & {
   op: BinaryOperator;
-  val: string | number | boolean;
+  val: DataRecordValue;
   formattedVal?: string;
 };
 
 export type SetQueryObjectFilterClause = BaseQueryObjectFilterClause & {
   op: SetOperator;
-  val: (string | number | boolean)[];
+  val: DataRecordValue[];
   formattedVal?: string[];
 };
 
@@ -62,6 +63,7 @@ export type QueryObjectFilterClause =
   | UnaryQueryObjectFilterClause;
 
 export type QueryObjectExtras = Partial<{
+  semantic_selection_version?: string;
   /** HAVING condition for SQLAlchemy */
   having?: string;
   relative_start?: string;
@@ -71,6 +73,11 @@ export type QueryObjectExtras = Partial<{
   where?: string;
   /** Instant Time Comparison */
   instant_time_comparison_range?: string;
+
+  time_compare?: string;
+
+  /** If true, WHERE/HAVING clauses need transpilation to target dialect */
+  transpile_to_dialect?: boolean;
 }>;
 
 export type ResidualQueryObjectData = {
@@ -86,9 +93,7 @@ export type ResidualQueryObjectData = {
  * and `transformProps`.
  */
 export interface QueryObject
-  extends QueryFields,
-    TimeRange,
-    ResidualQueryObjectData {
+  extends QueryFields, TimeRange, ResidualQueryObjectData {
   /**
    * Definition for annotation layers.
    */
@@ -149,6 +154,8 @@ export interface QueryObject
   series_columns?: QueryFormColumn[];
   series_limit?: number;
   series_limit_metric?: Maybe<QueryFormMetric>;
+
+  visible_deckgl_layers?: number[];
 }
 
 export interface QueryContext {
@@ -158,6 +165,8 @@ export interface QueryContext {
   };
   /** Force refresh of all queries */
   force: boolean;
+  /** Idempotency token for a forced refresh (present only when forcing) */
+  force_nonce?: string;
   /** Type of result to return for queries */
   result_type: string;
   /** Response format */
@@ -227,6 +236,7 @@ export const ErrorTypeEnum = {
   ASYNC_WORKERS_ERROR: 'ASYNC_WORKERS_ERROR',
   ADHOC_SUBQUERY_NOT_ALLOWED_ERROR: 'ADHOC_SUBQUERY_NOT_ALLOWED_ERROR',
   INVALID_SQL_ERROR: 'INVALID_SQL_ERROR',
+  RESULT_TOO_LARGE_ERROR: 'RESULT_TOO_LARGE_ERROR',
 
   // Generic errors
   GENERIC_COMMAND_ERROR: 'GENERIC_COMMAND_ERROR',
@@ -236,6 +246,7 @@ export const ErrorTypeEnum = {
   INVALID_PAYLOAD_FORMAT_ERROR: 'INVALID_PAYLOAD_FORMAT_ERROR',
   INVALID_PAYLOAD_SCHEMA_ERROR: 'INVALID_PAYLOAD_SCHEMA_ERROR',
   MARSHMALLOW_ERROR: 'MARSHMALLOW_ERROR',
+  CSRF_ERROR: 'CSRF_ERROR',
 
   // Report errors
   REPORT_NOTIFICATION_ERROR: 'REPORT_NOTIFICATION_ERROR',
@@ -283,7 +294,7 @@ export enum QueryState {
   TimedOut = 'timed_out',
 }
 
-// Inidcates a Query's state is still processing
+// Indicates a Query's state is still processing
 export const runningQueryStateList: QueryState[] = [
   QueryState.Running,
   QueryState.Started,
@@ -309,6 +320,7 @@ export type Query = {
   errorMessage: string | null;
   extra: {
     progress: string | null;
+    progress_text?: string;
     errors?: SupersetError[];
   };
   id: string;
@@ -316,9 +328,11 @@ export type Query = {
   link?: string;
   progress: number;
   resultsKey: string | null;
+  catalog?: string | null;
   schema?: string;
   sql: string;
   sqlEditorId: string;
+  sqlEditorImmutableId: string;
   state: QueryState;
   tab: string | null;
   tempSchema: string | null;
@@ -347,15 +361,17 @@ export type Query = {
 };
 
 export type QueryResults = {
-  results: {
-    displayLimitReached: boolean;
-    columns: QueryColumn[];
-    data: Record<string, unknown>[];
-    expanded_columns: QueryColumn[];
-    selected_columns: QueryColumn[];
-    query: { limit: number };
-    query_id?: number;
-  };
+  results: InnerQueryResults;
+};
+
+export type InnerQueryResults = {
+  displayLimitReached: boolean;
+  columns: QueryColumn[];
+  data: Record<string, unknown>[];
+  expanded_columns: QueryColumn[];
+  selected_columns: QueryColumn[];
+  query: { limit: number };
+  query_id?: number;
 };
 
 export type QueryResponse = Query & QueryResults;
@@ -366,6 +382,7 @@ export const testQuery: Query = {
   dbId: 1,
   sql: 'SELECT * FROM something',
   sqlEditorId: 'dfsadfs',
+  sqlEditorImmutableId: 'immutableId2353',
   tab: 'unimportant',
   tempTable: '',
   ctas: false,
@@ -479,5 +496,3 @@ export enum ContributionType {
 export type DatasourceSamplesQuery = {
   filters?: QueryObjectFilterClause[];
 };
-
-export default {};

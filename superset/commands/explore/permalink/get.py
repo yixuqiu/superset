@@ -17,11 +17,13 @@
 import logging
 from typing import Optional
 
+from jinja2.exceptions import TemplateError
 from sqlalchemy.exc import SQLAlchemyError
 
 from superset.commands.dataset.exceptions import DatasetNotFoundError
 from superset.commands.explore.permalink.base import BaseExplorePermalinkCommand
-from superset.commands.key_value.get import GetKeyValueCommand
+from superset.daos.key_value import KeyValueDAO
+from superset.exceptions import SupersetTemplateException
 from superset.explore.permalink.exceptions import ExplorePermalinkGetFailedError
 from superset.explore.permalink.types import ExplorePermalinkValue
 from superset.explore.utils import check_access as check_chart_access
@@ -44,11 +46,7 @@ class GetExplorePermalinkCommand(BaseExplorePermalinkCommand):
         self.validate()
         try:
             key = decode_permalink_id(self.key, salt=self.salt)
-            value: Optional[ExplorePermalinkValue] = GetKeyValueCommand(
-                resource=self.resource,
-                key=key,
-                codec=self.codec,
-            ).run()
+            value = KeyValueDAO.get_value(self.resource, key, self.codec)
             if value:
                 chart_id: Optional[int] = value.get("chartId")
                 # keep this backward compatible for old permalinks
@@ -58,7 +56,10 @@ class GetExplorePermalinkCommand(BaseExplorePermalinkCommand):
                 datasource_type = DatasourceType(
                     value.get("datasourceType", DatasourceType.TABLE)
                 )
-                check_chart_access(datasource_id, chart_id, datasource_type)
+                try:
+                    check_chart_access(datasource_id, chart_id, datasource_type)
+                except TemplateError as ex:
+                    raise SupersetTemplateException(str(ex)) from ex
                 return value
             return None
         except (

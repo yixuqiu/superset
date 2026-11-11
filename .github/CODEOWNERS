@@ -1,36 +1,29 @@
-# Notify all committers of DB migration changes, per SIP-59
-
-# https://github.com/apache/superset/issues/13351
-
-/superset/migrations/ @apache/superset-committers
-
-# Notify some committers of changes in the components
-
-/superset-frontend/src/components/Select/ @michael-s-molina @geido @kgabryje
-/superset-frontend/src/components/MetadataBar/ @michael-s-molina @geido @kgabryje
-/superset-frontend/src/components/DropdownContainer/ @michael-s-molina @geido @kgabryje
-
-# Notify Helm Chart maintainers about changes in it
-
-/helm/superset/ @craig-rueda @dpgaspar @villebro
-
-# Notify E2E test maintainers of changes
-
-/superset-frontend/cypress-base/ @jinghua-qa @geido @eschutho @rusackas @betodealmeida
-
 # Notify PMC members of changes to GitHub Actions
 
-/.github/ @villebro @geido @eschutho @rusackas @betodealmeida @nytai @mistercrunch @craig-rueda @john-bodley @kgabryje @dpgaspar
+/.github/ @villebro @geido @eschutho @rusackas @betodealmeida @nytai @mistercrunch @kgabryje @sha174n @dpgaspar @sadpandajoe @hainenber @msyavuz
 
-# Notify PMC members of changes to required Github Actions
+# Notify PMC members of changes to CI-executed scripts (supply-chain risk:
+# scripts/ files run directly in CI workflows and can execute arbitrary code)
 
-/.asf.yaml @villebro @geido @eschutho @rusackas @betodealmeida @nytai @mistercrunch @craig-rueda @john-bodley @kgabryje @dpgaspar
+/scripts/ @villebro @geido @eschutho @rusackas @betodealmeida @nytai @mistercrunch @kgabryje @dpgaspar @sha174n @sadpandajoe @hainenber @msyavuz
 
-# Maps are a finnicky contribution process we care about
+# Notify PMC members of changes to required GitHub Actions
 
-**/*.geojson @villebro @rusackas
-/superset-frontend/plugins/legacy-plugin-chart-country-map/ @villebro @rusackas
+/.asf.yaml @villebro @geido @eschutho @rusackas @betodealmeida @nytai @mistercrunch @kgabryje @dpgaspar @sha174n @sadpandajoe @Antonio-RiveroMartnez @msyavuz
 
-# Translations are a finnicky contribution that we care about
+# Maps are fragile and political. GeoJson edits MUST be made in the Jupyter notebook or they'll be overwritten.
 
-/superset/translations/ @villebro @rusackas
+**/*.geojson @villebro @rusackas @sadpandajoe
+**/*.ipynb @villebro @rusackas @sadpandajoe
+/superset-frontend/plugins/plugin-chart-country-map/ @villebro @rusackas @sadpandajoe
+
+# Notify PMC members of changes to extension-related files
+
+/docs/developer_docs/extensions/ @michael-s-molina @villebro @rusackas @geido @msyavuz @sadpandajoe
+/superset-extensions-cli/ @michael-s-molina @villebro @rusackas @sadpandajoe @geido @msyavuz
+/superset/extensions/ @michael-s-molina @villebro @rusackas @sadpandajoe @geido @msyavuz
+/superset-frontend/src/extensions/ @michael-s-molina @villebro @rusackas @sadpandajoe @geido @msyavuz
+
+# Notify PMC members of config changes e.g. feature flags
+
+/superset/config.py @michael-s-molina @villebro @rusackas @sadpandajoe @geido @msyavuz

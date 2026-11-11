@@ -16,8 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
-import { render, screen } from 'spec/helpers/testing-library';
+import {
+  createStore,
+  render,
+  screen,
+  waitFor,
+  userEvent,
+} from 'spec/helpers/testing-library';
+import reducerIndex from 'spec/helpers/reducerIndex';
 import Footer from 'src/features/datasets/AddDataset/Footer';
 
 const mockHistoryPush = jest.fn();
@@ -28,6 +34,19 @@ jest.mock('react-router-dom', () => ({
   }),
 }));
 
+// Mock the API call
+const mockCreateResource = jest.fn();
+jest.mock('src/views/CRUD/hooks', () => ({
+  useSingleViewResource: () => ({
+    createResource: mockCreateResource,
+    state: { loading: false },
+  }),
+  getDatabaseDocumentationLinks: () => ({
+    support:
+      'https://superset.apache.org/user-docs/databases/#installing-database-drivers',
+  }),
+}));
+
 const mockedProps = {
   url: 'realwebsite.com',
 };
@@ -35,11 +54,11 @@ const mockedProps = {
 const mockPropsWithDataset = {
   url: 'realwebsite.com',
   datasetObject: {
-    database: {
+    db: {
       id: '1',
       database_name: 'examples',
     },
-    owners: [1, 2, 3],
+    editors: [1, 2, 3],
     schema: 'public',
     dataset_name: 'Untitled',
     table_name: 'real_info',
@@ -47,7 +66,12 @@ const mockPropsWithDataset = {
   hasColumns: true,
 };
 
+// eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
 describe('Footer', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   test('renders a Footer with a cancel button and a disabled create button', () => {
     render(<Footer {...mockedProps} />, { useRedux: true });
 
@@ -56,21 +80,28 @@ describe('Footer', () => {
     });
 
     const createButton = screen.getByRole('button', {
-      name: /Create/i,
+      name: /Create and explore dataset/i,
     });
 
     expect(saveButton).toBeVisible();
     expect(createButton).toBeDisabled();
   });
 
-  test('renders a Create Dataset button when a table is selected', () => {
+  test('renders a Create Dataset dropdown button when a table is selected', () => {
     render(<Footer {...mockPropsWithDataset} />, { useRedux: true });
 
     const createButton = screen.getByRole('button', {
-      name: /Create/i,
+      name: /Create and explore dataset/i,
     });
 
     expect(createButton).toBeEnabled();
+
+    // Check that it's a dropdown button with the correct text
+    expect(createButton).toHaveTextContent('Create and explore dataset');
+
+    // Check for the dropdown arrow
+    const dropdownArrow = screen.getByRole('img', { hidden: true });
+    expect(dropdownArrow).toBeInTheDocument();
   });
 
   test('create button becomes disabled when table already has a dataset', () => {
@@ -79,9 +110,138 @@ describe('Footer', () => {
     });
 
     const createButton = screen.getByRole('button', {
-      name: /Create/i,
+      name: /Create and explore dataset/i,
     });
 
     expect(createButton).toBeDisabled();
+  });
+
+  test('shows dropdown menu when dropdown arrow is clicked', async () => {
+    render(<Footer {...mockPropsWithDataset} />, { useRedux: true });
+
+    // Find and click the dropdown trigger (the arrow part)
+    const dropdownTrigger = screen.getByRole('button', { name: 'down' });
+    await userEvent.click(dropdownTrigger);
+
+    // Check that the dropdown menu option is visible
+    await waitFor(() => {
+      expect(screen.getByText('Create dataset')).toBeVisible();
+    });
+  });
+
+  test('navigates to chart creation when main button is clicked', async () => {
+    mockCreateResource.mockResolvedValue(42); // Mock successful dataset creation
+
+    render(<Footer {...mockPropsWithDataset} />, { useRedux: true });
+
+    const createButton = screen.getByRole('button', {
+      name: /Create and explore dataset/i,
+    });
+
+    await userEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(mockCreateResource).toHaveBeenCalledWith({
+        database: '1',
+        catalog: undefined,
+        schema: 'public',
+        table_name: 'real_info',
+      });
+      // Redirect by ID: the table name can match datasets elsewhere.
+      expect(mockHistoryPush).toHaveBeenCalledWith('/chart/add/?dataset_id=42');
+      expect(mockHistoryPush).not.toHaveBeenCalledWith(
+        expect.stringContaining('real_info'),
+      );
+    });
+  });
+
+  test('shows the saved toast before redirecting to chart creation', async () => {
+    mockCreateResource.mockResolvedValue(42);
+    const store = createStore({}, reducerIndex);
+
+    render(<Footer {...mockPropsWithDataset} />, { store });
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /Create and explore dataset/i }),
+    );
+
+    await waitFor(() => {
+      expect(mockHistoryPush).toHaveBeenCalledWith('/chart/add/?dataset_id=42');
+    });
+    expect(
+      (store.getState() as unknown as { messageToasts: unknown }).messageToasts,
+    ).toEqual([
+      expect.objectContaining({ text: 'The dataset has been saved' }),
+    ]);
+  });
+
+  test('navigates to dataset list when "Create dataset" menu option is clicked', async () => {
+    mockCreateResource.mockResolvedValue(123);
+
+    render(<Footer {...mockPropsWithDataset} />, { useRedux: true });
+
+    // Open dropdown menu
+    const dropdownTrigger = screen.getByRole('button', { name: 'down' });
+    await userEvent.click(dropdownTrigger);
+
+    // Click the "Create dataset" option
+    await userEvent.click(await screen.findByText('Create dataset'));
+
+    await waitFor(() => {
+      expect(mockCreateResource).toHaveBeenCalledWith({
+        database: '1',
+        catalog: undefined,
+        schema: 'public',
+        table_name: 'real_info',
+      });
+      expect(mockHistoryPush).toHaveBeenCalledWith('/tablemodelview/list/');
+    });
+  });
+
+  test('handles dataset creation failure gracefully', async () => {
+    mockCreateResource.mockResolvedValue(null); // Mock failed dataset creation
+
+    render(<Footer {...mockPropsWithDataset} />, { useRedux: true });
+
+    const createButton = screen.getByRole('button', {
+      name: /Create and explore dataset/i,
+    });
+
+    await userEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(mockCreateResource).toHaveBeenCalled();
+      // Should not navigate if creation failed
+      expect(mockHistoryPush).not.toHaveBeenCalled();
+    });
+  });
+
+  test('passes correct data to createResource with catalog', async () => {
+    const mockPropsWithCatalog = {
+      ...mockPropsWithDataset,
+      datasetObject: {
+        ...mockPropsWithDataset.datasetObject,
+        catalog: 'test_catalog',
+      },
+    };
+
+    mockCreateResource.mockResolvedValue(456);
+
+    render(<Footer {...mockPropsWithCatalog} />, { useRedux: true });
+
+    const createButton = screen.getByRole('button', {
+      name: /Create and explore dataset/i,
+    });
+
+    await userEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(mockCreateResource).toHaveBeenCalledWith({
+        database: '1',
+        catalog: 'test_catalog',
+        schema: 'public',
+        table_name: 'real_info',
+      });
+    });
   });
 });

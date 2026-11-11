@@ -16,8 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
-import { GenericDataType, t, validateNumber } from '@superset-ui/core';
+import { t } from '@apache-superset/core/translation';
+import { validateNumber } from '@superset-ui/core';
+import { GenericDataType } from '@apache-superset/core/common';
+import { supersetTheme } from '@apache-superset/core/theme';
 import {
   ControlFormItemSpec,
   D3_FORMAT_DOCS,
@@ -25,7 +27,7 @@ import {
   D3_TIME_FORMAT_DOCS,
   D3_TIME_FORMAT_OPTIONS,
 } from '@superset-ui/chart-controls';
-import Icons from 'src/components/Icons';
+import { Icons } from '@superset-ui/core/components/Icons';
 import { ColumnConfigFormLayout } from './types';
 
 export type SharedColumnConfigProp =
@@ -39,6 +41,9 @@ export type SharedColumnConfigProp =
   | 'horizontalAlign'
   | 'truncateLongCells'
   | 'showCellBars'
+  | 'visible'
+  | 'customColumnName'
+  | 'displayTypeIcon'
   | 'currencyFormat';
 
 const d3NumberFormat: ControlFormItemSpec<'Select'> = {
@@ -52,11 +57,14 @@ const d3NumberFormat: ControlFormItemSpec<'Select'> = {
   })),
   defaultValue: D3_FORMAT_OPTIONS[0][0],
   creatable: true,
+  // Keep commas out of token separators because they are valid in D3 number formats.
+  tokenSeparators: ['\r\n', '\n', '\t', ';'],
   minWidth: '14em',
   debounceDelay: 500,
 };
 
 const d3TimeFormat: ControlFormItemSpec<'Select'> = {
+  allowNewOptions: true,
   controlType: 'Select',
   label: t('D3 format'),
   description: D3_TIME_FORMAT_DOCS,
@@ -99,7 +107,7 @@ const horizontalAlign: ControlFormItemSpec<'RadioButtonControl'> & {
   controlType: 'RadioButtonControl',
   label: t('Text align'),
   description: t('Horizontal alignment'),
-  width: 130,
+  width: supersetTheme.sizeUnit * 42,
   debounceDelay: 50,
   defaultValue: 'left',
   options: [
@@ -137,6 +145,21 @@ const colorPositiveNegative: ControlFormItemSpec<'Checkbox'> = {
   debounceDelay: 200,
 };
 
+const customColumnName: ControlFormItemSpec<'Input'> = {
+  controlType: 'Input',
+  label: t('Display column name'),
+  description: t('Custom column name (leave blank for default)'),
+  debounceDelay: 200,
+};
+
+const displayTypeIcon: ControlFormItemSpec<'Checkbox'> = {
+  controlType: 'Checkbox',
+  label: t('Display type icon'),
+  description: t('Whether to display the type icon (#, Δ, %)'),
+  defaultValue: true,
+  debounceDelay: 200,
+};
+
 const truncateLongCells: ControlFormItemSpec<'Checkbox'> = {
   controlType: 'Checkbox',
   label: t('Truncate Cells'),
@@ -149,8 +172,16 @@ const currencyFormat: ControlFormItemSpec<'CurrencyControl'> = {
   controlType: 'CurrencyControl',
   label: t('Currency format'),
   description: t(
-    'Customize chart metrics or columns with currency symbols as prefixes or suffixes. Choose a symbol from dropdown or type your own.',
+    "Format metrics or columns with currency symbols as prefixes or suffixes. Choose a symbol manually or use 'Auto-detect' to apply the correct symbol based on the dataset's currency code column. When multiple currencies are present, formatting falls back to neutral numbers.",
   ),
+  debounceDelay: 200,
+};
+
+const visible: ControlFormItemSpec<'Checkbox'> = {
+  controlType: 'Checkbox',
+  label: t('Display column in the chart'),
+  description: t('Whether to display in the chart'),
+  defaultValue: true,
   debounceDelay: 200,
 };
 /**
@@ -169,12 +200,15 @@ export const SHARED_COLUMN_CONFIG_PROPS = {
   d3TimeFormat,
   fractionDigits,
   columnWidth,
+  customColumnName,
+  displayTypeIcon,
   truncateLongCells,
   horizontalAlign,
   showCellBars,
   alignPositiveNegative,
   colorPositiveNegative,
   currencyFormat,
+  visible,
 };
 
 export const DEFAULT_CONFIG_FORM_LAYOUT: ColumnConfigFormLayout = {
@@ -187,7 +221,7 @@ export const DEFAULT_CONFIG_FORM_LAYOUT: ColumnConfigFormLayout = {
   ],
   [GenericDataType.Numeric]: [
     {
-      tab: t('Display'),
+      tab: t('Column Settings'),
       children: [
         [
           'columnWidth',
@@ -219,5 +253,12 @@ export const DEFAULT_CONFIG_FORM_LAYOUT: ColumnConfigFormLayout = {
       'columnWidth',
       { name: 'horizontalAlign', override: { defaultValue: 'left' } },
     ],
+  ],
+  [GenericDataType.MultiValue]: [
+    [
+      'columnWidth',
+      { name: 'horizontalAlign', override: { defaultValue: 'left' } },
+    ],
+    ['truncateLongCells'],
   ],
 };

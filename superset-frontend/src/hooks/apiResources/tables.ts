@@ -17,7 +17,9 @@
  * under the License.
  */
 import { useCallback, useMemo, useEffect, useRef } from 'react';
+import { ClientErrorObject } from '@superset-ui/core';
 import useEffectEvent from 'src/hooks/useEffectEvent';
+import { toQueryString } from 'src/utils/urlUtils';
 import { api, JsonResponse } from './queryApi';
 
 import { useSchemas } from './schemas';
@@ -50,23 +52,27 @@ export type Data = {
 
 export type FetchTablesQueryParams = {
   dbId?: string | number;
+  catalog?: string | null;
   schema?: string;
   forceRefresh?: boolean;
   onSuccess?: (data: Data, isRefetched: boolean) => void;
-  onError?: (error: Response) => void;
+  onError?: (error: ClientErrorObject) => void;
 };
 
 export type FetchTableMetadataQueryParams = {
   dbId: string | number;
+  catalog?: string | null;
   schema: string;
   table: string;
 };
 
 type ColumnKeyTypeType = 'pk' | 'fk' | 'index';
-interface Column {
+export interface Column {
   name: string;
   keys?: { type: ColumnKeyTypeType }[];
   type: string;
+  comment?: string;
+  longType: string;
 }
 
 export type TableMetaData = {
@@ -80,56 +86,73 @@ export type TableMetaData = {
   selectStar?: string;
   view?: string;
   columns: Column[];
+  comment?: string;
 };
 
-type TableMetadataReponse = {
+type TableMetadataResponse = {
   json: TableMetaData;
   response: Response;
 };
 
 export type TableExtendedMetadata = Record<string, string>;
 
-type Params = Omit<FetchTablesQueryParams, 'forceRefresh'>;
+type Params = Omit<FetchTablesQueryParams, 'forceRefresh'> & {
+  supportsSchemas?: boolean;
+};
 
 const tableApi = api.injectEndpoints({
   endpoints: builder => ({
     tables: builder.query<Data, FetchTablesQueryParams>({
       providesTags: ['Tables'],
-      query: ({ dbId, schema, forceRefresh }) => ({
+      query: ({ dbId, catalog, schema, forceRefresh }) => ({
         endpoint: `/api/v1/database/${dbId ?? 'undefined'}/tables/`,
         // TODO: Would be nice to add pagination in a follow-up. Needs endpoint changes.
         urlParams: {
           force: forceRefresh,
-          schema_name: schema ? encodeURIComponent(schema) : '',
+          schema_name: schema || '',
+          ...(catalog && { catalog_name: catalog }),
         },
         transformResponse: ({ json }: QueryResponse) => ({
           options: json.result,
           hasMore: json.count > json.result.length,
         }),
       }),
-      serializeQueryArgs: ({ queryArgs: { dbId, schema } }) => ({
+      serializeQueryArgs: ({ queryArgs: { dbId, catalog, schema } }) => ({
         dbId,
+        catalog,
         schema,
       }),
     }),
     tableMetadata: builder.query<TableMetaData, FetchTableMetadataQueryParams>({
-      query: ({ dbId, schema, table }) => ({
-        endpoint: schema
-          ? `/api/v1/database/${dbId}/table_metadata/?name=${table}&schema=${schema}`
-          : `/api/v1/database/${dbId}/table_metadata/?name=${table}`,
-        transformResponse: ({ json }: TableMetadataReponse) => json,
+      providesTags: result =>
+        result
+          ? [
+              { type: 'TableMetadatas', id: result.name },
+              { type: 'TableMetadatas', id: 'LIST' },
+            ]
+          : [{ type: 'TableMetadatas', id: 'LIST' }],
+      query: ({ dbId, catalog, schema, table }) => ({
+        endpoint: `/api/v1/database/${dbId}/table_metadata/${toQueryString({
+          name: table,
+          catalog,
+          schema,
+        })}`,
+        transformResponse: ({ json }: TableMetadataResponse) => json,
       }),
     }),
     tableExtendedMetadata: builder.query<
       TableExtendedMetadata,
       FetchTableMetadataQueryParams
     >({
-      query: ({ dbId, schema, table }) => ({
-        endpoint: schema
-          ? `/api/v1/database/${dbId}/table_metadata/extra/?name=${table}&schema=${schema}`
-          : `/api/v1/database/${dbId}/table_metadata/extra/?name=${table}`,
+      query: ({ dbId, catalog, schema, table }) => ({
+        endpoint: `/api/v1/database/${dbId}/table_metadata/extra/${toQueryString(
+          { name: table, catalog, schema },
+        )}`,
         transformResponse: ({ json }: JsonResponse) => json,
       }),
+      providesTags: (result, error, { table }) => [
+        { type: 'TableMetadatas', id: table },
+      ],
     }),
   }),
 });
@@ -137,6 +160,8 @@ const tableApi = api.injectEndpoints({
 export const {
   useLazyTablesQuery,
   useTablesQuery,
+  useLazyTableMetadataQuery,
+  useLazyTableExtendedMetadataQuery,
   useTableMetadataQuery,
   useTableExtendedMetadataQuery,
   endpoints: tableEndpoints,
@@ -144,22 +169,31 @@ export const {
 } = tableApi;
 
 export function useTables(options: Params) {
+  const {
+    dbId,
+    catalog,
+    schema,
+    supportsSchemas = true,
+    onSuccess,
+    onError,
+  } = options || {};
   const isMountedRef = useRef(false);
-  const { data: schemaOptions, isFetching } = useSchemas({
-    dbId: options.dbId,
+  const isRefreshingRef = useRef(false);
+  const { currentData: schemaOptions, isFetching } = useSchemas({
+    dbId,
+    catalog: catalog || undefined,
   });
   const schemaOptionsMap = useMemo(
     () => new Set(schemaOptions?.map(({ value }) => value)),
     [schemaOptions],
   );
-  const { dbId, schema, onSuccess, onError } = options || {};
 
-  const enabled = Boolean(
-    dbId && schema && !isFetching && schemaOptionsMap.has(schema),
-  );
+  const enabled = supportsSchemas
+    ? Boolean(dbId && schema && !isFetching && schemaOptionsMap.has(schema))
+    : Boolean(dbId);
 
   const result = useTablesQuery(
-    { dbId, schema, forceRefresh: false },
+    { dbId, catalog, schema, forceRefresh: false },
     {
       skip: !enabled,
     },
@@ -170,43 +204,39 @@ export function useTables(options: Params) {
     onSuccess?.(data, isRefetched);
   });
 
-  const handleOnError = useEffectEvent((error: Response) => {
+  const handleOnError = useEffectEvent((error: ClientErrorObject) => {
     onError?.(error);
   });
 
   const refetch = useCallback(() => {
     if (enabled) {
-      trigger({ dbId, schema, forceRefresh: true }).then(
-        ({ isSuccess, isError, data, error }) => {
-          if (isSuccess && data) {
-            handleOnSuccess(data, true);
-          }
-          if (isError) {
-            handleOnError(error as Response);
-          }
-        },
-      );
+      // Force a real server refresh. The success/error callbacks are fired by
+      // the subscribed effect below (the single source of truth), which observes
+      // the shared cache entry's completion. isRefreshingRef flags that
+      // completion as a user-requested refresh (isRefetched=true).
+      isRefreshingRef.current = true;
+      trigger({ dbId, catalog, schema, forceRefresh: true });
     }
-  }, [dbId, schema, enabled, handleOnSuccess, handleOnError, trigger]);
+  }, [dbId, catalog, schema, enabled, trigger]);
 
   useEffect(() => {
     if (isMountedRef.current) {
-      const {
-        requestId,
-        isSuccess,
-        isError,
-        isFetching,
-        data,
-        error,
-        originalArgs,
-      } = result;
-      if (!originalArgs?.forceRefresh && requestId && !isFetching) {
-        if (isSuccess && data) {
-          handleOnSuccess(data, false);
+      const { requestId, isSuccess, isError, isFetching, currentData, error } =
+        result;
+      // Fire once per completed fetch. isRefreshingRef (not the sticky
+      // originalArgs.forceRefresh, which the shared cache entry never resets)
+      // distinguishes a user-requested refresh from other fetches, so a failed
+      // force refresh no longer suppresses the callback on a later
+      // invalidation-driven refetch (e.g. after an OAuth2 redirect).
+      if (requestId && !isFetching) {
+        const isRefetched = isRefreshingRef.current;
+        if (isSuccess && currentData) {
+          handleOnSuccess(currentData, isRefetched);
         }
         if (isError) {
-          handleOnError(error as Response);
+          handleOnError(error as ClientErrorObject);
         }
+        isRefreshingRef.current = false;
       }
     } else {
       isMountedRef.current = true;

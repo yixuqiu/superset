@@ -23,12 +23,12 @@ from sqlalchemy.types import NVARCHAR
 
 from superset.db_engine_specs.redshift import RedshiftEngineSpec
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
-from superset.sql_parse import Table
-from tests.integration_tests.db_engine_specs.base_tests import TestDbEngineSpec
+from superset.sql.parse import Table
+from tests.integration_tests.base_tests import SupersetTestCase
 from tests.integration_tests.test_app import app
 
 
-class TestRedshiftDbEngineSpec(TestDbEngineSpec):
+class TestRedshiftDbEngineSpec(SupersetTestCase):
     def test_extract_errors(self):
         """
         Test that custom error messages are extracted correctly.
@@ -210,7 +210,9 @@ psql: error: could not connect to server: Operation timed out
 
         test_array = np.array(data, dtype=numpy_dtype)
 
-        df = pd.DataFrame(test_array, columns=column_names)
+        # pandas 3 infers string values as StringDtype; force object columns so the
+        # test keeps covering the no-string-dtype path.
+        df = pd.DataFrame(test_array, columns=column_names).astype(object)
         df.to_sql = mock.MagicMock()
 
         with app.app_context():

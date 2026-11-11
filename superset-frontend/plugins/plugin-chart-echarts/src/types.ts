@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { RefObject } from 'react';
+import { RefObject, Ref } from 'react';
+
 import {
   ChartDataResponseResult,
   ChartProps,
@@ -31,8 +32,8 @@ import {
   SqlaFormData,
   ChartMetadata,
 } from '@superset-ui/core';
-import { EChartsCoreOption, ECharts } from 'echarts';
-import { TooltipMarker } from 'echarts/types/src/util/format';
+import type { EChartsCoreOption, EChartsType } from 'echarts/core';
+import type { ECElementEvent } from 'echarts/types/src/util/types';
 import { StackControlsValue } from './constants';
 
 export type EchartsStylesProps = {
@@ -41,7 +42,7 @@ export type EchartsStylesProps = {
 };
 
 export type Refs = {
-  echartRef?: React.Ref<EchartsHandler>;
+  echartRef?: Ref<EchartsHandler>;
   divRef?: RefObject<HTMLDivElement>;
 };
 
@@ -50,14 +51,16 @@ export interface EchartsProps {
   width: number;
   echartOptions: EChartsCoreOption;
   eventHandlers?: EventHandlers;
+  queryEventHandlers?: QueryEventHandlers;
   zrEventHandlers?: EventHandlers;
   selectedValues?: Record<number, string>;
   forceClear?: boolean;
   refs: Refs;
+  vizType?: string;
 }
 
 export interface EchartsHandler {
-  getEchartInstance: () => ECharts | undefined;
+  getEchartInstance: () => EChartsType | undefined;
 }
 
 export enum ForecastSeriesEnum {
@@ -85,11 +88,11 @@ export enum LegendType {
 }
 
 export type ForecastValue = {
-  marker: TooltipMarker;
   observation?: number;
   forecastTrend?: number;
   forecastLower?: number;
   forecastUpper?: number;
+  color?: string;
 };
 
 export type LegendFormData = {
@@ -97,9 +100,17 @@ export type LegendFormData = {
   legendOrientation: LegendOrientation;
   legendType: LegendType;
   showLegend: boolean;
+  legendSort: 'asc' | 'desc' | null;
+  showSelectorLegend: boolean;
 };
 
 export type EventHandlers = Record<string, { (props: any): void }>;
+
+export type QueryEventHandlers = {
+  name: string;
+  query: string;
+  handler: (props: ECElementEvent) => void;
+}[];
 
 export enum LabelPositionEnum {
   Top = 'top',
@@ -125,6 +136,7 @@ export interface BaseTransformedProps<F> {
   echartOptions: EChartsCoreOption;
   formData: F;
   height: number;
+  isRefreshing?: boolean;
   onContextMenu?: (
     clientX: number,
     clientY: number,
@@ -137,6 +149,7 @@ export interface BaseTransformedProps<F> {
   width: number;
   emitCrossFilters?: boolean;
   coltypeMapping?: Record<string, number>;
+  onLegendScroll?: (currentIndex: number) => void;
 }
 
 export type CrossFilterTransformedProps = {

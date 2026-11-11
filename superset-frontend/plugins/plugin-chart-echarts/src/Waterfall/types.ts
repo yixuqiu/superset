@@ -24,8 +24,8 @@ import {
   QueryFormMetric,
   RgbaColor,
 } from '@superset-ui/core';
-import { BarDataItemOption } from 'echarts/types/src/chart/bar/BarSeries';
-import { CallbackDataParams } from 'echarts/types/src/util/types';
+import type { BarDataItemOption } from 'echarts/types/src/chart/bar/BarSeries';
+import type { CallbackDataParams } from 'echarts/types/src/util/types';
 import { BaseTransformedProps, LegendFormData } from '../types';
 
 export type WaterfallFormXTicksLayout =
@@ -55,12 +55,20 @@ export type EchartsWaterfallFormData = QueryFormData &
     xAxisLabel: string;
     xAxisTimeFormat?: string;
     xTicksLayout?: WaterfallFormXTicksLayout;
+    showXAxis: boolean;
     yAxisLabel: string;
     yAxisFormat: string;
+    showYAxis: boolean;
+    increaseLabel?: string;
+    decreaseLabel?: string;
+    totalLabel?: string;
+    showTotal: boolean;
   };
 
 export const DEFAULT_FORM_DATA: Partial<EchartsWaterfallFormData> = {
   showLegend: true,
+  showXAxis: true,
+  showYAxis: true,
 };
 
 export interface EchartsWaterfallChartProps extends ChartProps {

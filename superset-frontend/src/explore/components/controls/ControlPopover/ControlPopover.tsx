@@ -16,58 +16,115 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { useCallback, useRef, useEffect, useState } from 'react';
+// eslint-disable-next-line no-restricted-syntax -- whole React import is required for `ControlPopover.test.tsx` Jest test passing.
+import React, { FC, useCallback, useRef, useEffect, useState } from 'react';
 
-import Popover, {
+import {
+  Popover,
   PopoverProps as BasePopoverProps,
-  TooltipPlacement,
-} from 'src/components/Popover';
+} from '@superset-ui/core/components';
 
-const sectionContainerId = 'controlSections';
+import { TooltipPlacement } from '@superset-ui/core/components/Tooltip/types';
+
+import { CONTROL_SECTIONS_ID } from 'src/explore/constants';
+
 export const getSectionContainerElement = () =>
-  document.getElementById(sectionContainerId)?.lastElementChild as HTMLElement;
+  document.getElementById(CONTROL_SECTIONS_ID)?.lastElementChild as HTMLElement;
 
-const getElementYVisibilityRatioOnContainer = (node: HTMLElement) => {
+const getElementVisibilityRatio = (node?: HTMLElement) => {
   const containerHeight = window?.innerHeight;
-  const nodePositionInViewport = node?.getBoundingClientRect()?.top;
-  if (!containerHeight || !nodePositionInViewport) {
-    return 0;
+  const containerWidth = window?.innerWidth;
+
+  const rect = node?.getBoundingClientRect();
+  if (!containerHeight || !containerWidth || !rect?.top) {
+    return { yRatio: 0, xRatio: 0 };
   }
 
-  return nodePositionInViewport / containerHeight;
+  const yRatio = rect.top / containerHeight;
+  const xRatio = rect.left / containerWidth;
+  return { yRatio, xRatio };
 };
 
 export type PopoverProps = BasePopoverProps & {
-  getVisibilityRatio?: typeof getElementYVisibilityRatioOnContainer;
+  getVisibilityRatio?: typeof getElementVisibilityRatio;
 };
 
-const ControlPopover: React.FC<PopoverProps> = ({
+/** Placements antd already shifts, capped so the arrow keeps touching its trigger. */
+const SHIFTING_PLACEMENTS = new Set(['top', 'bottom', 'left', 'right']);
+
+/**
+ * antd forwards `autoAdjustOverflow` to rc-trigger, which also reads `shiftX` and
+ * `shiftY` from it, but leaves those two out of the type it accepts. Declaring
+ * them keeps `adjustX`/`adjustY` checked against antd's own definition.
+ * @see https://github.com/react-component/trigger/blob/master/src/hooks/useAlign.ts
+ */
+type ShiftableOverflow = Exclude<
+  BasePopoverProps['autoAdjustOverflow'],
+  boolean | undefined
+> & {
+  shiftX?: boolean | number;
+  shiftY?: boolean | number;
+};
+
+export const SHIFT_INTO_VIEWPORT: ShiftableOverflow = {
+  adjustX: 1,
+  adjustY: 1,
+  shiftX: true,
+  shiftY: true,
+};
+
+// The other placements can flip a popup across its trigger but never nudge it back
+// into the viewport, leaving an oversized one stranded off screen. Only they opt in:
+// lifting the cap above would let those popups slide off a trigger scrolled out of
+// view, taking the arrow away from what it points at.
+export const getAutoAdjustOverflow = (placement: TooltipPlacement) =>
+  SHIFTING_PLACEMENTS.has(placement) ? true : SHIFT_INTO_VIEWPORT;
+
+const ControlPopover: FC<PopoverProps> = ({
   getPopupContainer,
-  getVisibilityRatio = getElementYVisibilityRatioOnContainer,
-  visible: visibleProp,
-  destroyTooltipOnHide = false,
+  getVisibilityRatio = getElementVisibilityRatio,
+  open: visibleProp,
+  defaultOpen,
+  onOpenChange,
+  destroyOnHidden = false,
+  placement: initialPlacement = 'right',
+  autoAdjustOverflow,
   ...props
 }) => {
+  const isControlled = visibleProp !== undefined;
   const triggerElementRef = useRef<HTMLElement>();
-
-  const [visible, setVisible] = useState(
-    visibleProp === undefined ? props.defaultVisible : visibleProp,
-  );
-  const [placement, setPlacement] = React.useState<TooltipPlacement>('right');
+  const [uncontrolledVisible, setUncontrolledVisible] = useState(!!defaultOpen);
+  const visible = isControlled ? !!visibleProp : uncontrolledVisible;
+  const [placement, setPlacement] =
+    React.useState<TooltipPlacement>(initialPlacement);
 
   const calculatePlacement = useCallback(() => {
-    const visibilityRatio = getVisibilityRatio(triggerElementRef.current!);
-    if (visibilityRatio < 0.35 && placement !== 'rightTop') {
-      setPlacement('rightTop');
-    } else if (visibilityRatio > 0.65 && placement !== 'rightBottom') {
-      setPlacement('rightBottom');
-    } else {
-      setPlacement('right');
+    if (!triggerElementRef.current || !visible) return;
+
+    const { yRatio, xRatio } = getVisibilityRatio(triggerElementRef.current);
+
+    const horizontalPlacement =
+      xRatio < 0.35 ? 'right' : xRatio > 0.65 ? 'left' : '';
+
+    const verticalPlacement = (() => {
+      if (yRatio < 0.35) return horizontalPlacement ? 'top' : 'bottom';
+      if (yRatio > 0.65) return horizontalPlacement ? 'bottom' : 'top';
+      return '';
+    })();
+
+    const newPlacement =
+      ((horizontalPlacement
+        ? horizontalPlacement +
+          verticalPlacement.charAt(0).toUpperCase() +
+          verticalPlacement.slice(1)
+        : verticalPlacement) as TooltipPlacement) || 'left';
+    if (newPlacement !== placement) {
+      setPlacement(newPlacement);
     }
-  }, [getVisibilityRatio]);
+  }, [getVisibilityRatio, visible, placement]);
 
   const changeContainerScrollStatus = useCallback(
-    visible => {
+    (visible: boolean | undefined) => {
       const element = getSectionContainerElement();
       if (element) {
         element.style.setProperty(
@@ -83,7 +140,6 @@ const ControlPopover: React.FC<PopoverProps> = ({
   const handleGetPopupContainer = useCallback(
     (triggerNode: HTMLElement) => {
       triggerElementRef.current = triggerNode;
-
       return getPopupContainer?.(triggerNode) || document.body;
     },
     [calculatePlacement, getPopupContainer],
@@ -91,36 +147,42 @@ const ControlPopover: React.FC<PopoverProps> = ({
 
   const handleOnVisibleChange = useCallback(
     (visible: boolean | undefined) => {
-      if (visible === undefined) {
-        changeContainerScrollStatus(visible);
+      if (!isControlled) {
+        setUncontrolledVisible(!!visible);
       }
-
-      setVisible(!!visible);
-      props.onVisibleChange?.(!!visible);
+      onOpenChange?.(!!visible);
     },
-    [props, changeContainerScrollStatus],
+    [isControlled, onOpenChange],
   );
 
   const handleDocumentKeyDownListener = useCallback(
     (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setVisible(false);
-        props.onVisibleChange?.(false);
+        if (!isControlled) {
+          setUncontrolledVisible(false);
+        }
+        onOpenChange?.(false);
       }
     },
-    [props],
+    [isControlled, onOpenChange],
+  );
+  const handleAfterOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        calculatePlacement();
+      }
+    },
+    [calculatePlacement],
   );
 
   useEffect(() => {
-    if (visibleProp !== undefined) {
-      setVisible(!!visibleProp);
+    if (!visible) {
+      return undefined;
     }
-  }, [visibleProp]);
-
-  useEffect(() => {
-    if (visible !== undefined) {
-      changeContainerScrollStatus(visible);
-    }
+    changeContainerScrollStatus(true);
+    return () => {
+      changeContainerScrollStatus(false);
+    };
   }, [visible, changeContainerScrollStatus]);
 
   useEffect(() => {
@@ -134,20 +196,50 @@ const ControlPopover: React.FC<PopoverProps> = ({
   }, [handleDocumentKeyDownListener, visible]);
 
   useEffect(() => {
-    if (visible) {
-      calculatePlacement();
-    }
+    if (!visible || !triggerElementRef.current) return () => {};
+
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        calculatePlacement();
+      });
+    });
+
+    const intersectionObserver = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            calculatePlacement();
+          }
+        });
+      },
+      { threshold: [0, 0.25, 0.5, 0.75, 1] },
+    );
+
+    resizeObserver.observe(
+      triggerElementRef.current.parentElement || document.body,
+    );
+    intersectionObserver.observe(triggerElementRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      intersectionObserver.disconnect();
+    };
   }, [visible, calculatePlacement]);
 
   return (
     <Popover
       {...props}
-      visible={visible}
-      arrowPointAtCenter
+      open={visible}
+      arrow={{ pointAtCenter: true }}
+      autoAdjustOverflow={
+        autoAdjustOverflow ?? getAutoAdjustOverflow(placement)
+      }
       placement={placement}
-      onVisibleChange={handleOnVisibleChange}
+      onOpenChange={handleOnVisibleChange}
       getPopupContainer={handleGetPopupContainer}
-      destroyTooltipOnHide={destroyTooltipOnHide}
+      destroyOnHidden={destroyOnHidden}
+      afterOpenChange={handleAfterOpenChange}
+      rootClassName="superset-explore-popover"
     />
   );
 };

@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { render, screen, waitFor } from 'spec/helpers/testing-library';
 import ColorSchemeLabel from './ColorSchemeLabel';
 
@@ -56,4 +55,18 @@ test('should render the colors', () => {
   setup();
   const allColors = screen.getAllByTestId('color');
   expect(allColors).toHaveLength(12);
+});
+
+test('should render aria-label with scheme name on the swatch container', () => {
+  setup();
+  const labelled = screen.getByLabelText('Color scheme: Superset Colors');
+  expect(labelled).toBeInTheDocument();
+});
+
+test('color swatches should be aria-hidden', () => {
+  setup();
+  const allColors = screen.getAllByTestId('color');
+  allColors.forEach(color => {
+    expect(color).toHaveAttribute('aria-hidden', 'true');
+  });
 });

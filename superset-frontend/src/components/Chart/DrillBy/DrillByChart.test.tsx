@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { render, screen, waitFor } from 'spec/helpers/testing-library';
 import chartQueries, { sliceId } from 'spec/fixtures/mockChartQueries';
 import { noOp } from 'src/utils/common';
@@ -28,12 +27,7 @@ const dataset = {
   created_on_humanized: '01-01-2001',
   description: 'desc',
   table_name: 'my_dataset',
-  owners: [
-    {
-      first_name: 'Sarah',
-      last_name: 'Connor',
-    },
-  ],
+  editors: [{ id: 1, label: 'Sarah Connor', type: 1 }],
   columns: [
     {
       column_name: 'gender',

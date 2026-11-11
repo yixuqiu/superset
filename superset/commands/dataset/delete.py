@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from functools import partial
 from typing import Optional
 
 from superset import security_manager
@@ -26,8 +27,8 @@ from superset.commands.dataset.exceptions import (
 )
 from superset.connectors.sqla.models import SqlaTable
 from superset.daos.dataset import DatasetDAO
-from superset.daos.exceptions import DAODeleteFailedError
 from superset.exceptions import SupersetSecurityException
+from superset.utils.decorators import on_error, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -37,24 +38,20 @@ class DeleteDatasetCommand(BaseCommand):
         self._model_ids = model_ids
         self._models: Optional[list[SqlaTable]] = None
 
+    @transaction(on_error=partial(on_error, reraise=DatasetDeleteFailedError))
     def run(self) -> None:
         self.validate()
         assert self._models
-
-        try:
-            DatasetDAO.delete(self._models)
-        except DAODeleteFailedError as ex:
-            logger.exception(ex.exception)
-            raise DatasetDeleteFailedError() from ex
+        DatasetDAO.delete(self._models)
 
     def validate(self) -> None:
         # Validate/populate model exists
         self._models = DatasetDAO.find_by_ids(self._model_ids)
         if not self._models or len(self._models) != len(self._model_ids):
             raise DatasetNotFoundError()
-        # Check ownership
+        # Check editorship
         for model in self._models:
             try:
-                security_manager.raise_for_ownership(model)
+                security_manager.raise_for_editorship(model)
             except SupersetSecurityException as ex:
                 raise DatasetForbiddenError() from ex

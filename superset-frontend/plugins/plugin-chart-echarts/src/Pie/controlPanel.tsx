@@ -16,8 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
-import { ensureIsInt, t, validateNonEmpty } from '@superset-ui/core';
+import { t } from '@apache-superset/core/translation';
+import { ensureIsInt, validateNonEmpty } from '@superset-ui/core';
 import {
   ControlPanelConfig,
   ControlPanelsContainerProps,
@@ -27,6 +27,8 @@ import {
   D3_FORMAT_OPTIONS,
   D3_TIME_FORMAT_OPTIONS,
   getStandardizedControls,
+  sharedControls,
+  DEFAULT_TIME_FORMAT,
 } from '@superset-ui/chart-controls';
 import { DEFAULT_FORM_DATA } from './types';
 import { legendSection } from '../controls';
@@ -40,6 +42,7 @@ const {
   outerRadius,
   numberFormat,
   showLabels,
+  roseType,
 } = DEFAULT_FORM_DATA;
 
 const config: ControlPanelConfig = {
@@ -56,12 +59,8 @@ const config: ControlPanelConfig = {
           {
             name: 'sort_by_metric',
             config: {
+              ...sharedControls.sort_by_metric,
               default: true,
-              type: 'CheckboxControl',
-              label: t('Sort by metric'),
-              description: t(
-                'Whether to sort results by the selected metric in descending order.',
-              ),
             },
           },
         ],
@@ -87,6 +86,40 @@ const config: ControlPanelConfig = {
             },
           },
         ],
+        [
+          {
+            name: 'threshold_for_other',
+            config: {
+              type: 'NumberControl',
+              label: t('Threshold for Other'),
+              min: 0,
+              step: 0.5,
+              max: 100,
+              default: 0,
+              renderTrigger: true,
+              description: t(
+                'Values less than this percentage will be grouped into the Other category.',
+              ),
+            },
+          },
+        ],
+        [
+          {
+            name: 'roseType',
+            config: {
+              type: 'SelectControl',
+              label: t('Rose Type'),
+              default: roseType,
+              renderTrigger: true,
+              choices: [
+                ['area', t('Area')],
+                ['radius', t('Radius')],
+                [null, t('None')],
+              ],
+              description: t('Whether to show as Nightingale chart.'),
+            },
+          },
+        ],
         ...legendSection,
         // eslint-disable-next-line react/jsx-key
         [<ControlSubSectionHeader>{t('Labels')}</ControlSubSectionHeader>],
@@ -106,8 +139,28 @@ const config: ControlPanelConfig = {
                 ['key_percent', t('Category and Percentage')],
                 ['key_value_percent', t('Category, Value and Percentage')],
                 ['value_percent', t('Value and Percentage')],
+                ['template', t('Template')],
               ],
               description: t('What should be shown on the label?'),
+            },
+          },
+        ],
+        [
+          {
+            name: 'label_template',
+            config: {
+              type: 'TextControl',
+              label: t('Label Template'),
+              renderTrigger: true,
+              description: t(
+                'Format data labels. ' +
+                  'Use variables: {name}, {value}, {percent}. ' +
+                  '\\n represents a new line. ' +
+                  'ECharts compatibility:\n' +
+                  '{a} (series), {b} (name), {c} (value), {d} (percentage)',
+              ),
+              visibility: ({ controls }: ControlPanelsContainerProps) =>
+                controls?.label_type?.value === 'template',
             },
           },
         ],
@@ -136,7 +189,7 @@ const config: ControlPanelConfig = {
               label: t('Date format'),
               renderTrigger: true,
               choices: D3_TIME_FORMAT_OPTIONS,
-              default: 'smart_date',
+              default: DEFAULT_TIME_FORMAT,
               description: D3_FORMAT_DOCS,
             },
           },
@@ -238,6 +291,45 @@ const config: ControlPanelConfig = {
               description: t('Inner radius of donut hole'),
               visibility: ({ controls }: ControlPanelsContainerProps) =>
                 Boolean(controls?.donut?.value),
+            },
+          },
+        ],
+        [
+          {
+            name: 'startAngle',
+            config: {
+              type: 'NumberControl',
+              min: 0,
+              max: 360,
+              step: 10,
+              label: t('Start angle'),
+              description: t(
+                'Angle at which the first slice begins, in degrees. ' +
+                  '90° starts at the top, 0°/360° at the right, ' +
+                  '270° at the bottom, and 180° at the left.',
+              ),
+              renderTrigger: true,
+              default: DEFAULT_FORM_DATA.startAngle,
+            },
+          },
+        ],
+        [
+          {
+            name: 'sweptAngle',
+            config: {
+              type: 'NumberControl',
+              min: 10,
+              max: 360,
+              step: 10,
+              label: t('Sweep angle'),
+              description: t(
+                'Total angle covered by the chart, in degrees. ' +
+                  '360° draws a full circle and 180° draws a half donut. ' +
+                  'Partial arcs are automatically re-centered and scaled ' +
+                  'to make use of the available space.',
+              ),
+              renderTrigger: true,
+              default: DEFAULT_FORM_DATA.sweptAngle,
             },
           },
         ],

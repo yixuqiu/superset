@@ -21,44 +21,23 @@
 
 /* eslint-disable no-console */
 /**
- * Build packages/plugins filtered by globs
+ * Build packages/plugins filtered by globs.
+ *
+ * `--skip-lib` skips the CommonJS Babel pass (lib/), which only the npm
+ * publish needs: webpack and Jest resolve the workspaces from src/. The
+ * production esm/ Babel pass and `tsc --build` (the .d.ts output the root
+ * type check depends on) still run, so Babel config breaks surface pre-merge.
  */
+
+import { spawnSync } from 'node:child_process';
+import { globSync } from 'node:fs';
+import yargs from 'yargs';
+import { hideBin } from 'yargs/helpers';
+
 process.env.PATH = `./node_modules/.bin:${process.env.PATH}`;
 
-const rimraf = require('rimraf');
-const { spawnSync } = require('child_process');
-const fastGlob = require('fast-glob');
-const { argv } = require('yargs')
-  .option('lint', {
-    describe: 'whether to run ESLint',
-    type: 'boolean',
-    // lint is slow, so not turning it on by default
-    default: false,
-  })
-  .option('babel', {
-    describe: 'Whether to run Babel',
-    type: 'boolean',
-    default: true,
-  })
-  .option('clean', {
-    describe: 'Whether to clean cache',
-    type: 'boolean',
-    default: false,
-  })
-  .option('type', {
-    describe: 'Whether to run tsc',
-    type: 'boolean',
-    default: true,
-  });
-
-const {
-  _: globs,
-  lint: shouldLint,
-  babel: shouldRunBabel,
-  clean: shouldCleanup,
-  type: shouldRunTyping,
-} = argv;
-const glob = globs.length > 1 ? `{${globs.join(',')}}` : globs[0] || '*';
+const { globs, skipLib } = yargs(hideBin(process.argv)).parse();
+const glob = globs?.length > 1 ? `{${globs.join(',')}}` : globs?.[0] || '*';
 
 const BABEL_CONFIG = '--config-file=../../babel.config.js';
 
@@ -78,62 +57,93 @@ function run(cmd, options) {
 function getPackages(packagePattern, tsOnly = false) {
   let pattern = packagePattern;
   if (pattern === '*' && !tsOnly) {
-    return `@superset-ui/!(${[...META_PACKAGES].join('|')})`;
+    return `{@superset-ui/!(${[...META_PACKAGES].join('|')}),@apache-superset/*}`;
   }
   if (!pattern.includes('*')) {
     pattern = `*${pattern}`;
   }
-  const packages = [
+
+  // Find packages in both @superset-ui and @apache-superset scopes
+  const supersetUiPackages = [
     ...new Set(
-      fastGlob
-        .sync([
+      globSync(
+        [
           `./node_modules/@superset-ui/${pattern}/src/**/*.${
             tsOnly ? '{ts,tsx}' : '{ts,tsx,js,jsx}'
           }`,
-        ])
-        .map(x => x.split('/')[3])
+        ],
+        { followSymlinks: true },
+      )
+        .map(x => x.split('/')[2])
         .filter(x => !META_PACKAGES.has(x)),
     ),
   ];
-  if (packages.length === 0) {
+
+  const apachePackages = [
+    ...new Set(
+      globSync(
+        [
+          `./node_modules/@apache-superset/${pattern}/src/**/*.${
+            tsOnly ? '{ts,tsx}' : '{ts,tsx,js,jsx}'
+          }`,
+        ],
+        { followSymlinks: true },
+      ).map(x => x.split('/')[2]),
+    ),
+  ];
+
+  const allScopes = [];
+  if (supersetUiPackages.length > 0) {
+    allScopes.push(
+      `@superset-ui/${
+        supersetUiPackages.length > 1
+          ? `{${supersetUiPackages.join(',')}}`
+          : supersetUiPackages[0]
+      }`,
+    );
+  }
+  if (apachePackages.length > 0) {
+    allScopes.push(
+      `@apache-superset/${
+        apachePackages.length > 1
+          ? `{${apachePackages.join(',')}}`
+          : apachePackages[0]
+      }`,
+    );
+  }
+
+  if (allScopes.length === 0) {
     throw new Error('No matching packages');
   }
-  return `@superset-ui/${
-    packages.length > 1 ? `{${packages.join(',')}}` : packages[0]
-  }`;
+
+  return allScopes.length > 1 ? `{${allScopes.join(',')}}` : allScopes[0];
 }
 
 let scope = getPackages(glob);
 
-if (shouldLint) {
-  run(`npm run eslint -- . --fix {packages,plugins}/${scope}/{src,test}`);
-}
+const babelCommand = `lerna exec --stream --concurrency 10 --scope ${scope} -- babel ${BABEL_CONFIG} src --extensions ".ts,.tsx,.js,.jsx" --copy-files`;
 
-if (shouldCleanup) {
-  // these modules will be installed by `npm link` but not useful for actual build
-  const dirtyModules = 'node_modules/@types/react,node_modules/@superset-ui';
-  const cachePath = `./node_modules/${scope}/{lib,esm,tsconfig.tsbuildinfo,${dirtyModules}}`;
-  console.log(`\n>> Cleaning up ${cachePath}`);
-  rimraf.sync(cachePath);
-}
-
-if (shouldRunBabel) {
+if (skipLib) {
+  console.log('--- Skipping babel lib (--skip-lib) ---');
+} else {
   console.log('--- Run babel --------');
-  const babelCommand = `lerna exec --stream --concurrency 10 --scope ${scope}
-         -- babel ${BABEL_CONFIG} src --extensions ".ts,.tsx,.js,.jsx" --copy-files`;
   run(`${babelCommand} --out-dir lib`);
-
-  console.log('--- Run babel esm ---');
-  // run again with
-  run(`${babelCommand} --out-dir esm`, {
-    env: { ...process.env, BABEL_OUTPUT: 'esm' },
-  });
 }
 
-if (shouldRunTyping) {
-  console.log('--- Run tsc ---');
-  // only run tsc for packages with ts files
-  scope = getPackages(glob, true);
-  run(`lerna exec --stream --concurrency 3 --scope ${scope} \
-       -- ../../scripts/tsc.sh --build`);
-}
+console.log('--- Run babel esm ---');
+// run again with
+run(`${babelCommand} --out-dir esm`, {
+  env: { ...process.env, NODE_ENV: 'production', BABEL_OUTPUT: 'esm' },
+});
+
+console.log('--- Run tsc ---');
+// Build shared references once so parallel plugins only read their declarations.
+// Otherwise each plugin's build can write the same outputs concurrently.
+run(
+  'tsc --build packages/superset-core packages/superset-ui-core packages/superset-ui-chart-controls',
+);
+// only run tsc for packages with ts files
+scope = getPackages(glob, true);
+run(
+  `lerna exec --stream --concurrency 3 --scope ${scope} -- ../../scripts/tsc.sh --build`,
+);

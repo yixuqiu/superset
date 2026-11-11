@@ -23,9 +23,10 @@ import {
   DataRecordValue,
   tooltipHtml,
 } from '@superset-ui/core';
-import { EChartsCoreOption, GraphSeriesOption } from 'echarts';
+import type { EChartsCoreOption } from 'echarts/core';
+import type { GraphSeriesOption } from 'echarts/charts';
+import type { GraphEdgeItemOption } from 'echarts/types/src/chart/graph/GraphSeries';
 import { extent as d3Extent } from 'd3-array';
-import { GraphEdgeItemOption } from 'echarts/types/src/chart/graph/GraphSeries';
 import {
   EchartsGraphFormData,
   EChartGraphNode,
@@ -35,12 +36,15 @@ import {
   EchartsGraphChartProps,
 } from './types';
 import { DEFAULT_GRAPH_SERIES_OPTION } from './constants';
+import { NULL_STRING } from '../constants';
 import {
   getChartPadding,
   getColtypesMapping,
   getLegendProps,
+  getLegendScrollDataIndex,
   sanitizeHtml,
 } from '../utils/series';
+import { resolveLegendLayout } from '../utils/legendLayout';
 import { getDefaultTooltip } from '../utils/tooltip';
 import { Refs } from '../types';
 
@@ -139,17 +143,24 @@ function getKeyByValue(
   return Object.keys(object).find(key => object[key] === value) as string;
 }
 
+/** Use the shared null label and quote literals that would collide with it. */
 function getCategoryName(columnName: string, name?: DataRecordValue) {
-  if (name === false) {
-    return `${columnName}: false`;
-  }
-  if (name === true) {
-    return `${columnName}: true`;
-  }
   if (name == null) {
-    return 'N/A';
+    return NULL_STRING;
   }
-  return String(name);
+  const label =
+    typeof name === 'boolean' ? `${columnName}: ${name}` : String(name);
+  // Decode quoted forms only to detect collisions with the shared null label.
+  // Trim at each level because the color scale trims its keys.
+  let unquoted = label.trim();
+  while (unquoted.startsWith('"')) {
+    try {
+      unquoted = (JSON.parse(unquoted) as string).trim();
+    } catch {
+      break;
+    }
+  }
+  return unquoted === NULL_STRING ? JSON.stringify(label) : label;
 }
 
 export default function transformProps(
@@ -165,6 +176,8 @@ export default function transformProps(
     filterState,
     emitCrossFilters,
     theme,
+    legendState,
+    legendIndex,
   } = chartProps;
   const data: DataRecord[] = queriesData[0].data || [];
   const coltypeMapping = getColtypesMapping(queriesData[0]);
@@ -187,7 +200,9 @@ export default function transformProps(
     legendMargin,
     legendOrientation,
     legendType,
+    legendSort,
     showLegend,
+    showSelectorLegend,
     baseEdgeWidth,
     baseNodeSize,
     edgeSymbol,
@@ -197,6 +212,7 @@ export default function transformProps(
   const refs: Refs = {};
   const metricLabel = getMetricLabel(metric);
   const colorFn = CategoricalColorNamespace.getScale(colorScheme as string);
+  const firstColor = colorFn.range()[0];
   const nodes: { [name: string]: number } = {};
   const categories: Set<string> = new Set();
   const echartNodes: EChartGraphNode[] = [];
@@ -206,7 +222,12 @@ export default function transformProps(
    * Get the node id of an existing node,
    * or create a new node if it doesn't exist.
    */
-  function getOrCreateNode(name: string, col: string, category?: string) {
+  function getOrCreateNode(
+    name: string,
+    col: string,
+    category?: string,
+    color?: string,
+  ) {
     if (!(name in nodes)) {
       nodes[name] = echartNodes.length;
       echartNodes.push({
@@ -220,11 +241,11 @@ export default function transformProps(
           ...getDefaultTooltip(refs),
           ...DEFAULT_GRAPH_SERIES_OPTION.tooltip,
         },
+        itemStyle: { color },
       });
     }
     const node = echartNodes[nodes[name]];
     if (category) {
-      categories.add(category);
       // category may be empty when one of `sourceCategory`
       // or `targetCategory` is not set.
       if (!node.category) {
@@ -232,6 +253,26 @@ export default function transformProps(
       }
     }
     return node;
+  }
+
+  data.forEach(link => {
+    if (link[metricLabel]) {
+      [sourceCategory, targetCategory].forEach(column => {
+        if (column) {
+          const category = getCategoryName(column, link[column]);
+          if (category) categories.add(category);
+        }
+      });
+    }
+  });
+
+  // Resolve saved/custom colors before copying colors into nodes and edges:
+  // the scale can reassign an earlier automatic color when a later label uses it.
+  categories.forEach(category => colorFn(category, sliceId));
+
+  /** Read resolved colors without reallocating them for unsaved charts. */
+  function getCategoryColor(category: string): string {
+    return colorFn.chartLabelsColorMap.get(category.trim()) ?? firstColor;
   }
 
   data.forEach(link => {
@@ -247,8 +288,25 @@ export default function transformProps(
     const targetCategoryName = targetCategory
       ? getCategoryName(targetCategory, link[targetCategory])
       : undefined;
-    const sourceNode = getOrCreateNode(sourceName, source, sourceCategoryName);
-    const targetNode = getOrCreateNode(targetName, target, targetCategoryName);
+    const sourceNodeColor = sourceCategoryName
+      ? getCategoryColor(sourceCategoryName)
+      : firstColor;
+    const targetNodeColor = targetCategoryName
+      ? getCategoryColor(targetCategoryName)
+      : firstColor;
+
+    const sourceNode = getOrCreateNode(
+      sourceName,
+      source,
+      sourceCategoryName,
+      sourceNodeColor,
+    );
+    const targetNode = getOrCreateNode(
+      targetName,
+      target,
+      targetCategoryName,
+      targetNodeColor,
+    );
 
     sourceNode.value += value;
     targetNode.value += value;
@@ -257,7 +315,9 @@ export default function transformProps(
       source: sourceNode.id,
       target: targetNode.id,
       value,
-      lineStyle: {},
+      lineStyle: {
+        color: sourceNodeColor,
+      },
       emphasis: {},
       select: {},
     });
@@ -270,14 +330,30 @@ export default function transformProps(
   });
 
   const categoryList = [...categories];
-
+  const legendData = categoryList.sort((a: string, b: string) => {
+    if (!legendSort) return 0;
+    return legendSort === 'asc' ? a.localeCompare(b) : b.localeCompare(a);
+  });
+  const { effectiveLegendMargin, effectiveLegendType } = resolveLegendLayout({
+    chartHeight: height,
+    chartWidth: width,
+    legendItems: legendData,
+    legendMargin,
+    orientation: legendOrientation,
+    show: showLegend,
+    showSelectors: showSelectorLegend !== false,
+    theme,
+    type: legendType,
+  });
   const series: GraphSeriesOption[] = [
     {
       zoom: DEFAULT_GRAPH_SERIES_OPTION.zoom,
       type: 'graph',
       categories: categoryList.map(c => ({
         name: c,
-        itemStyle: { color: colorFn(c, sliceId) },
+        itemStyle: {
+          color: getCategoryColor(c),
+        },
       })),
       layout,
       force: {
@@ -295,9 +371,12 @@ export default function transformProps(
       edgeSymbol: parseEdgeSymbol(edgeSymbol),
       edgeSymbolSize: baseEdgeWidth * 2,
       selectedMode,
-      ...getChartPadding(showLegend, legendOrientation, legendMargin),
+      ...getChartPadding(showLegend, legendOrientation, effectiveLegendMargin),
       animation: DEFAULT_GRAPH_SERIES_OPTION.animation,
-      label: DEFAULT_GRAPH_SERIES_OPTION.label,
+      label: {
+        ...DEFAULT_GRAPH_SERIES_OPTION.label,
+        color: theme.colorText,
+      },
       lineStyle: DEFAULT_GRAPH_SERIES_OPTION.lineStyle,
       emphasis: DEFAULT_GRAPH_SERIES_OPTION.emphasis,
     },
@@ -321,13 +400,23 @@ export default function transformProps(
       },
     },
     legend: {
-      ...getLegendProps(legendType, legendOrientation, showLegend, theme),
-      data: categoryList,
+      ...getLegendProps(
+        effectiveLegendType,
+        legendOrientation,
+        showLegend,
+        theme,
+        showSelectorLegend,
+        false,
+        legendState,
+      ),
+      scrollDataIndex: getLegendScrollDataIndex(legendIndex, legendData.length),
+      data: legendData,
     },
     series,
   };
 
-  const { onContextMenu, setDataMask } = hooks;
+  const { onContextMenu, setDataMask, onLegendStateChanged, onLegendScroll } =
+    hooks;
 
   return {
     width,
@@ -336,6 +425,8 @@ export default function transformProps(
     echartOptions,
     onContextMenu,
     setDataMask,
+    onLegendStateChanged,
+    onLegendScroll,
     filterState,
     refs,
     emitCrossFilters,

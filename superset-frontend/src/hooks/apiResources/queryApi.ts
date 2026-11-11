@@ -52,7 +52,7 @@ export const supersetClientQuery: BaseQueryFn<
 ) =>
   SupersetClient.request({
     ...rest,
-    endpoint: `${endpoint}${urlParams ? `?q=${rison.encode(urlParams)}` : ''}`,
+    endpoint: `${endpoint}${urlParams ? `?q=${encodeURIComponent(rison.encode(urlParams))}` : ''}`,
     method,
     parseMethod,
     signal: api.signal,
@@ -64,6 +64,7 @@ export const supersetClientQuery: BaseQueryFn<
       getClientErrorObject(response).then(errorObj => ({
         error: {
           error: errorObj?.message || errorObj?.error || response.statusText,
+          errors: errorObj?.errors || [], // used by <ErrorMessageWithStackTrace />
           status: response.status,
         },
       })),
@@ -72,6 +73,7 @@ export const supersetClientQuery: BaseQueryFn<
 export const api = createApi({
   reducerPath: 'queryApi',
   tagTypes: [
+    'Catalogs',
     'Schemas',
     'Tables',
     'DatabaseFunctions',

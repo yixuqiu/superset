@@ -16,17 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 import {
   BinaryQueryObjectFilterClause,
   getColumnLabel,
-  getNumberFormatter,
-  getTimeFormatter,
+  DataRecordValue,
 } from '@superset-ui/core';
 import { SunburstTransformedProps } from './types';
 import Echart from '../components/Echart';
 import { EventHandlers, TreePathInfo } from '../types';
-import { formatSeriesName } from '../utils/series';
+import {
+  getSunburstDetailFilter,
+  getSunburstDrillByFilter,
+  getSunburstFilter,
+  getSunburstSelectionKey,
+} from './utils';
 
 export const extractTreePathInfo = (treePathInfo: TreePathInfo[] | undefined) =>
   (treePathInfo ?? [])
@@ -39,7 +43,6 @@ export default function EchartsSunburst(props: SunburstTransformedProps) {
     width,
     echartOptions,
     setDataMask,
-    labelMap,
     selectedValues,
     formData,
     onContextMenu,
@@ -47,67 +50,81 @@ export default function EchartsSunburst(props: SunburstTransformedProps) {
     emitCrossFilters,
     coltypeMapping,
   } = props;
-  const { columns } = formData;
+  const { columns = [] } = formData;
 
   const getCrossFilterDataMask = useCallback(
-    (treePathInfo: TreePathInfo[]) => {
+    (treePathInfo: TreePathInfo[], records: DataRecordValue[]) => {
       const treePath = extractTreePathInfo(treePathInfo);
-      const name = treePath.join(',');
-      const selected = Object.values(selectedValues);
-      let values: string[];
-      if (selected.includes(name)) {
-        values = selected.filter(v => v !== name);
-      } else {
-        values = [name];
+      const joinedTreePath = getSunburstSelectionKey(
+        records,
+        treePath,
+        columns,
+        coltypeMapping,
+      );
+      const index = records.length - 1;
+      const value = treePath[treePath.length - 1];
+
+      const isCurrentValueSelected =
+        Object.values(selectedValues).includes(joinedTreePath) ||
+        Object.values(selectedValues).includes(treePath.join(','));
+
+      if (!columns?.length || !records.length || isCurrentValueSelected) {
+        return {
+          dataMask: {
+            extraFormData: {
+              filters: [],
+            },
+            filterState: {
+              value: null,
+              selectedValues: [],
+            },
+          },
+          isCurrentValueSelected,
+        };
       }
-      const labels = values.map(value => labelMap[value]);
+
+      const filter = getSunburstFilter(
+        columns[index],
+        records[index],
+        formData,
+        coltypeMapping?.[getColumnLabel(columns[index])],
+      );
 
       return {
         dataMask: {
           extraFormData: {
-            filters:
-              values.length === 0 || !columns
-                ? []
-                : columns.slice(0, treePath.length).map((col, idx) => {
-                    const val = labels.map(v => v[idx]);
-                    if (val === null || val === undefined)
-                      return {
-                        col,
-                        op: 'IS NULL' as const,
-                      };
-                    return {
-                      col,
-                      op: 'IN' as const,
-                      val: val as (string | number | boolean)[],
-                    };
-                  }),
+            filters: [filter],
+            // Target queries rewrite temporal filter bounds from time_range.
+            ...(filter.op === 'TEMPORAL_RANGE' && {
+              time_range: String(filter.val),
+            }),
           },
           filterState: {
-            value: labels.length ? labels : null,
-            selectedValues: values.length ? values : null,
+            value,
+            selectedValues: [joinedTreePath],
           },
         },
-        isCurrentValueSelected: selected.includes(name),
+        isCurrentValueSelected,
       };
     },
-    [columns, labelMap, selectedValues],
+    [columns, selectedValues, coltypeMapping, formData],
   );
 
   const handleChange = useCallback(
-    (treePathInfo: TreePathInfo[]) => {
-      if (!emitCrossFilters) {
+    (treePathInfo: TreePathInfo[], records: DataRecordValue[]) => {
+      if (!emitCrossFilters || !columns?.length) {
         return;
       }
 
-      setDataMask(getCrossFilterDataMask(treePathInfo).dataMask);
+      setDataMask(getCrossFilterDataMask(treePathInfo, records).dataMask);
     },
-    [emitCrossFilters, setDataMask, getCrossFilterDataMask],
+    [emitCrossFilters, columns?.length, setDataMask, getCrossFilterDataMask],
   );
 
   const eventHandlers: EventHandlers = {
     click: props => {
-      const { treePathInfo } = props;
-      handleChange(treePathInfo);
+      const { treePathInfo, data } = props;
+      handleChange(treePathInfo, data.records);
     },
     contextmenu: async eventParams => {
       if (onContextMenu) {
@@ -119,30 +136,35 @@ export default function EchartsSunburst(props: SunburstTransformedProps) {
         const drillToDetailFilters: BinaryQueryObjectFilterClause[] = [];
         const drillByFilters: BinaryQueryObjectFilterClause[] = [];
         if (columns?.length) {
-          treePath.forEach((path, i) =>
-            drillToDetailFilters.push({
-              col: columns[i],
-              op: '==',
-              val: records[i],
-              formattedVal: path,
-            }),
-          );
-          const val = treePath[treePath.length - 1];
-          drillByFilters.push({
-            col: columns[treePath.length - 1],
-            op: '==',
-            val,
-            formattedVal: formatSeriesName(val, {
-              timeFormatter: getTimeFormatter(formData.dateFormat),
-              numberFormatter: getNumberFormatter(formData.numberFormat),
-              coltype:
-                coltypeMapping?.[getColumnLabel(columns[treePath.length - 1])],
-            }),
+          records.forEach((record: DataRecordValue, i: number) => {
+            const coltype = coltypeMapping?.[getColumnLabel(columns[i])];
+            drillToDetailFilters.push(
+              getSunburstDetailFilter(
+                columns[i],
+                record,
+                formData,
+                coltype,
+                treePath[i],
+              ),
+            );
+            if (i === records.length - 1) {
+              drillByFilters.push(
+                getSunburstDrillByFilter(
+                  columns[i],
+                  record,
+                  formData,
+                  coltype,
+                  treePath[i],
+                ),
+              );
+            }
           });
         }
         onContextMenu(pointerEvent.clientX, pointerEvent.clientY, {
           drillToDetail: drillToDetailFilters,
-          crossFilter: getCrossFilterDataMask(treePathInfo),
+          crossFilter: columns?.length
+            ? getCrossFilterDataMask(treePathInfo, records)
+            : undefined,
           drillBy: { filters: drillByFilters, groupbyFieldName: 'columns' },
         });
       }
@@ -157,6 +179,7 @@ export default function EchartsSunburst(props: SunburstTransformedProps) {
       echartOptions={echartOptions}
       eventHandlers={eventHandlers}
       selectedValues={selectedValues}
+      vizType={formData.vizType}
     />
   );
 }

@@ -27,7 +27,7 @@ class SupersetErrorType(StrEnum):
     Types of errors that can exist within Superset.
 
     Keep in sync with superset-frontend/packages/superset-ui-core/src/query/types/Query.ts
-    """
+    """  # noqa: E501
 
     # Frontend errors
     FRONTEND_CSRF_ERROR = "FRONTEND_CSRF_ERROR"
@@ -40,7 +40,7 @@ class SupersetErrorType(StrEnum):
     TABLE_DOES_NOT_EXIST_ERROR = "TABLE_DOES_NOT_EXIST_ERROR"
     SCHEMA_DOES_NOT_EXIST_ERROR = "SCHEMA_DOES_NOT_EXIST_ERROR"
     CONNECTION_INVALID_USERNAME_ERROR = "CONNECTION_INVALID_USERNAME_ERROR"
-    CONNECTION_INVALID_PASSWORD_ERROR = "CONNECTION_INVALID_PASSWORD_ERROR"
+    CONNECTION_INVALID_PASSWORD_ERROR = "CONNECTION_INVALID_PASSWORD_ERROR"  # noqa: S105
     CONNECTION_INVALID_HOSTNAME_ERROR = "CONNECTION_INVALID_HOSTNAME_ERROR"
     CONNECTION_PORT_CLOSED_ERROR = "CONNECTION_PORT_CLOSED_ERROR"
     CONNECTION_INVALID_PORT_ERROR = "CONNECTION_INVALID_PORT_ERROR"
@@ -60,6 +60,7 @@ class SupersetErrorType(StrEnum):
 
     # Security access errors
     TABLE_SECURITY_ACCESS_ERROR = "TABLE_SECURITY_ACCESS_ERROR"
+    SEMANTIC_EXECUTION_REFUSED_ERROR = "SEMANTIC_EXECUTION_REFUSED_ERROR"
     DATASOURCE_SECURITY_ACCESS_ERROR = "DATASOURCE_SECURITY_ACCESS_ERROR"
     DATABASE_SECURITY_ACCESS_ERROR = "DATABASE_SECURITY_ACCESS_ERROR"
     QUERY_SECURITY_ACCESS_ERROR = "QUERY_SECURITY_ACCESS_ERROR"
@@ -87,6 +88,7 @@ class SupersetErrorType(StrEnum):
     ASYNC_WORKERS_ERROR = "ASYNC_WORKERS_ERROR"
     ADHOC_SUBQUERY_NOT_ALLOWED_ERROR = "ADHOC_SUBQUERY_NOT_ALLOWED_ERROR"
     INVALID_SQL_ERROR = "INVALID_SQL_ERROR"
+    RESULT_TOO_LARGE_ERROR = "RESULT_TOO_LARGE_ERROR"
 
     # Generic errors
     GENERIC_COMMAND_ERROR = "GENERIC_COMMAND_ERROR"
@@ -96,6 +98,7 @@ class SupersetErrorType(StrEnum):
     INVALID_PAYLOAD_FORMAT_ERROR = "INVALID_PAYLOAD_FORMAT_ERROR"
     INVALID_PAYLOAD_SCHEMA_ERROR = "INVALID_PAYLOAD_SCHEMA_ERROR"
     MARSHMALLOW_ERROR = "MARSHMALLOW_ERROR"
+    CSRF_ERROR = "CSRF_ERROR"
 
     # Report errors
     REPORT_NOTIFICATION_ERROR = "REPORT_NOTIFICATION_ERROR"
@@ -151,6 +154,7 @@ ISSUE_CODES = {
     1036: _("The database was deleted."),
     1037: _("Custom SQL fields cannot contain sub-queries."),
     1040: _("The submitted payload failed validation."),
+    1041: _("The result size exceeds the allowed limit."),
 }
 
 
@@ -190,6 +194,7 @@ ERROR_TYPES_TO_ISSUE_CODES_MAPPING = {
     SupersetErrorType.DATABASE_NOT_FOUND_ERROR: [1011, 1036],
     SupersetErrorType.CONNECTION_DATABASE_TIMEOUT: [1001, 1009],
     SupersetErrorType.MARSHMALLOW_ERROR: [1040],
+    SupersetErrorType.RESULT_TOO_LARGE_ERROR: [1041],
 }
 
 
@@ -198,7 +203,7 @@ class ErrorLevel(StrEnum):
     Levels of errors that can exist within Superset.
 
     Keep in sync with superset-frontend/packages/superset-ui-core/src/query/types/Query.ts
-    """
+    """  # noqa: E501
 
     INFO = "info"
     WARNING = "warning"

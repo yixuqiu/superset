@@ -16,11 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
-import { isObject } from 'lodash';
-import { t, SupersetClient } from '@superset-ui/core';
-import Button from 'src/components/Button';
+import { FC } from 'react';
+import { isObject } from 'lodash-es';
+import { t } from '@apache-superset/core/translation';
+import { SupersetClient } from '@superset-ui/core';
+import { Button } from '@superset-ui/core/components';
 import { useHistory } from 'react-router-dom';
+import { safeStringify } from 'src/utils/safeStringify';
 
 interface SimpleDataSource {
   id: string;
@@ -38,7 +40,7 @@ const CLOSE = t('Close');
 const SAVE_AS_DATASET = t('Save as Dataset');
 const OPEN_IN_SQL_LAB = t('Open in SQL Lab');
 
-const ViewQueryModalFooter: React.FC<ViewQueryModalFooterProps> = (props: {
+const ViewQueryModalFooter: FC<ViewQueryModalFooterProps> = (props: {
   closeModal: () => void;
   changeDatasource: () => void;
   datasource: SimpleDataSource;
@@ -55,7 +57,9 @@ const ViewQueryModalFooter: React.FC<ViewQueryModalFooterProps> = (props: {
       sql,
     };
     if (openInNewWindow) {
-      SupersetClient.postForm('/sqllab/', payload);
+      SupersetClient.postForm('/sqllab/', {
+        form_data: safeStringify(payload),
+      });
     } else {
       history.push({
         pathname: '/sqllab',
@@ -76,6 +80,7 @@ const ViewQueryModalFooter: React.FC<ViewQueryModalFooterProps> = (props: {
   return (
     <div>
       <Button
+        buttonStyle="secondary"
         onClick={() => {
           props?.closeModal?.();
           props?.changeDatasource?.();
@@ -83,11 +88,13 @@ const ViewQueryModalFooter: React.FC<ViewQueryModalFooterProps> = (props: {
       >
         {SAVE_AS_DATASET}
       </Button>
-      <Button onClick={({ metaKey }) => openSQL(Boolean(metaKey))}>
+      <Button
+        buttonStyle="secondary"
+        onClick={({ metaKey, ctrlKey }) => openSQL(Boolean(metaKey || ctrlKey))}
+      >
         {OPEN_IN_SQL_LAB}
       </Button>
       <Button
-        buttonStyle="primary"
         onClick={() => {
           props?.closeModal?.();
         }}

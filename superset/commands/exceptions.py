@@ -28,7 +28,7 @@ class CommandException(SupersetException):
     def __repr__(self) -> str:
         if self._exception:
             return repr(self._exception)
-        return repr(self)
+        return super().__repr__()
 
 
 class ObjectNotFoundError(CommandException):
@@ -71,7 +71,7 @@ class CommandInvalidError(CommandException):
         self._exceptions.extend(exceptions)
 
     def get_list_classnames(self) -> list[str]:
-        return list(sorted({ex.__class__.__name__ for ex in self._exceptions}))
+        return sorted({ex.__class__.__name__ for ex in self._exceptions})
 
     def normalized_messages(self) -> dict[Any, Any]:
         errors: dict[Any, Any] = {}
@@ -105,20 +105,6 @@ class ImportFailedError(CommandException):
     message = "Import failed for an unknown reason"
 
 
-class OwnersNotFoundValidationError(ValidationError):
-    status = 422
-
-    def __init__(self) -> None:
-        super().__init__([_("Owners are invalid")], field_name="owners")
-
-
-class RolesNotFoundValidationError(ValidationError):
-    status = 422
-
-    def __init__(self) -> None:
-        super().__init__([_("Some roles do not exist")], field_name="roles")
-
-
 class DatasourceTypeInvalidError(ValidationError):
     status = 422
 
@@ -140,3 +126,13 @@ class QueryNotFoundValidationError(ValidationError):
 
     def __init__(self) -> None:
         super().__init__([_("Query does not exist")], field_name="datasource_id")
+
+
+class TagNotFoundValidationError(ValidationError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, field_name="tags")
+
+
+class TagForbiddenError(ForbiddenError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)

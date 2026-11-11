@@ -17,9 +17,10 @@
  * under the License.
  */
 
-import { css, SupersetTheme } from '@superset-ui/core';
-import React, { useRef, useState } from 'react';
-import { Tooltip } from 'src/components/Tooltip';
+import { css, SupersetTheme } from '@apache-superset/core/theme';
+import { t } from '@apache-superset/core/translation';
+import { useRef, useState } from 'react';
+import { Tooltip } from '@superset-ui/core/components';
 
 type ColorSchemeLabelProps = {
   colors: string[];
@@ -31,17 +32,17 @@ export default function ColorSchemeLabel(props: ColorSchemeLabelProps) {
   const { id, label, colors } = props;
   const [showTooltip, setShowTooltip] = useState<boolean>(false);
   const labelNameRef = useRef<HTMLElement>(null);
-  const labelColorsRef = useRef<HTMLElement>(null);
+  const labelsColorRef = useRef<HTMLElement>(null);
   const handleShowTooltip = () => {
     const labelNameElement = labelNameRef.current;
-    const labelColorsElement = labelColorsRef.current;
+    const labelsColorElement = labelsColorRef.current;
     if (
       labelNameElement &&
-      labelColorsElement &&
+      labelsColorElement &&
       (labelNameElement.scrollWidth > labelNameElement.offsetWidth ||
         labelNameElement.scrollHeight > labelNameElement.offsetHeight ||
-        labelColorsElement.scrollWidth > labelColorsElement.offsetWidth ||
-        labelColorsElement.scrollHeight > labelColorsElement.offsetHeight)
+        labelsColorElement.scrollWidth > labelsColorElement.offsetWidth ||
+        labelsColorElement.scrollHeight > labelsColorElement.offsetHeight)
     ) {
       setShowTooltip(true);
     }
@@ -55,8 +56,9 @@ export default function ColorSchemeLabel(props: ColorSchemeLabelProps) {
       <span
         data-test="color"
         key={`${id}-${i}`}
-        css={(theme: { gridUnit: number }) => css`
-          padding-left: ${theme.gridUnit / 2}px;
+        aria-hidden="true"
+        css={(theme: { sizeUnit: number }) => css`
+          padding-left: ${theme.sizeUnit / 2}px;
           :before {
             content: '';
             display: inline-block;
@@ -82,7 +84,7 @@ export default function ColorSchemeLabel(props: ColorSchemeLabelProps) {
       overlayClassName="color-scheme-tooltip"
       title={tooltipContent}
       key={id}
-      visible={showTooltip}
+      open={showTooltip}
     >
       <span
         className="color-scheme-option"
@@ -94,13 +96,14 @@ export default function ColorSchemeLabel(props: ColorSchemeLabelProps) {
           justify-content: flex-start;
         `}
         data-test={id}
+        aria-label={t('Color scheme: %s', label)}
       >
         <span
           className="color-scheme-label"
           ref={labelNameRef}
           css={(theme: SupersetTheme) => css`
             min-width: 125px;
-            padding-right: ${theme.gridUnit * 2}px;
+            padding-right: ${theme.sizeUnit * 2}px;
             text-overflow: ellipsis;
             overflow: hidden;
             white-space: nowrap;
@@ -109,13 +112,13 @@ export default function ColorSchemeLabel(props: ColorSchemeLabelProps) {
           {label}
         </span>
         <span
-          ref={labelColorsRef}
+          ref={labelsColorRef}
           css={(theme: SupersetTheme) => css`
             flex: 100%;
             text-overflow: ellipsis;
             overflow: hidden;
             white-space: nowrap;
-            padding-right: ${theme.gridUnit}px;
+            padding-right: ${theme.sizeUnit}px;
           `}
         >
           {colorsList()}

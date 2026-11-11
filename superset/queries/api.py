@@ -18,14 +18,22 @@ import logging
 from typing import Any
 
 import backoff
-from flask_appbuilder.api import expose, protect, request, rison, safe
+from flask_appbuilder.api import (
+    expose,
+    protect,
+    request,
+    rison as parse_rison,
+    safe,
+)
 from flask_appbuilder.models.sqla.interface import SQLAInterface
+from marshmallow import ValidationError
 
 from superset import db, event_logger
+from superset.common.db_query_status import QueryStatus
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.daos.query import QueryDAO
 from superset.databases.filters import DatabaseFilter
-from superset.exceptions import SupersetException
+from superset.exceptions import SupersetCancelQueryException, SupersetException
 from superset.models.sql_lab import Query
 from superset.queries.filters import QueryFilter
 from superset.queries.schemas import (
@@ -41,7 +49,7 @@ from superset.views.base_api import (
     requires_json,
     statsd_metrics,
 )
-from superset.views.filters import BaseFilterRelatedUsers, FilterRelatedOwners
+from superset.views.filters import BaseFilterRelatedUsers, FilterRelatedUsers
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +99,7 @@ class QueryRestApi(BaseSupersetModelRestApi):
         "user.id",
         "user.last_name",
         "start_time",
+        "start_running_time",
         "end_time",
         "tmp_table_name",
         "tracking_url",
@@ -135,6 +144,7 @@ class QueryRestApi(BaseSupersetModelRestApi):
     order_columns = [
         "changed_on",
         "database.database_name",
+        "duration",
         "rows",
         "schema",
         "start_time",
@@ -144,12 +154,14 @@ class QueryRestApi(BaseSupersetModelRestApi):
     ]
     base_related_field_filters = {
         "created_by": [["id", BaseFilterRelatedUsers, lambda: []]],
+        "changed_by": [["id", BaseFilterRelatedUsers, lambda: []]],
         "user": [["id", BaseFilterRelatedUsers, lambda: []]],
         "database": [["id", DatabaseFilter, lambda: []]],
     }
     related_field_filters = {
-        "created_by": RelatedFieldFilter("first_name", FilterRelatedOwners),
-        "user": RelatedFieldFilter("first_name", FilterRelatedOwners),
+        "created_by": RelatedFieldFilter("first_name", FilterRelatedUsers),
+        "changed_by": RelatedFieldFilter("first_name", FilterRelatedUsers),
+        "user": RelatedFieldFilter("first_name", FilterRelatedUsers),
     }
 
     search_columns = [
@@ -160,6 +172,7 @@ class QueryRestApi(BaseSupersetModelRestApi):
         "user",
         "start_time",
         "sql_editor_id",
+        "uuid",
     ]
 
     allowed_rel_fields = {"database", "user"}
@@ -168,11 +181,12 @@ class QueryRestApi(BaseSupersetModelRestApi):
     @expose("/updated_since")
     @protect()
     @safe
-    @rison(queries_get_updated_since_schema)
+    @parse_rison(queries_get_updated_since_schema)
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".get_updated_since",
+        action=lambda self, *args, **kwargs: (
+            f"{self.__class__.__name__}.get_updated_since"
+        ),
         log_to_statsd=False,
     )
     def get_updated_since(self, **kwargs: Any) -> FlaskResponse:
@@ -223,16 +237,15 @@ class QueryRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @event_logger.log_this_with_context(
-        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}"
-        f".stop_query",
+        action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.stop_query",
         log_to_statsd=False,
     )
     @backoff.on_exception(
         backoff.constant,
         Exception,
         interval=1,
-        on_backoff=lambda details: db.session.rollback(),
-        on_giveup=lambda details: db.session.rollback(),
+        on_backoff=lambda details: db.session.rollback(),  # pylint: disable=consider-using-transaction
+        on_giveup=lambda details: db.session.rollback(),  # pylint: disable=consider-using-transaction
         max_tries=5,
     )
     @requires_json
@@ -264,12 +277,24 @@ class QueryRestApi(BaseSupersetModelRestApi):
               $ref: '#/components/responses/401'
             404:
               $ref: '#/components/responses/404'
+            422:
+              description: >
+                Query already finished or target transaction committed;
+                includes the recorded query
             500:
               $ref: '#/components/responses/500'
         """
         try:
             body = self.stop_query_schema.load(request.json)
-            QueryDAO.stop_query(body["client_id"])
+            query = QueryDAO.stop_query(body["client_id"])
+            if query.status != QueryStatus.STOPPED:
+                return self.response(
+                    SupersetCancelQueryException.status,
+                    message="Could not cancel query",
+                    query=query.to_dict(),
+                )
             return self.response(200, result="OK")
+        except ValidationError as error:
+            return self.response_400(message=error.messages)
         except SupersetException as ex:
             return self.response(ex.status, message=ex.message)

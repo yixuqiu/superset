@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { useReducer, Reducer, useEffect, useState } from 'react';
+import { useReducer, Reducer, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import useDatasetsList from 'src/features/datasets/hooks/useDatasetLists';
 import Header from 'src/features/datasets/AddDataset/Header';
@@ -40,7 +40,7 @@ export function datasetReducer(
   action: DSReducerActionType,
 ): Partial<DatasetObject> | Schema | null {
   const trimmedState = {
-    ...(state || {}),
+    ...state,
   };
 
   switch (action.type) {
@@ -48,6 +48,14 @@ export function datasetReducer(
       return {
         ...trimmedState,
         ...action.payload,
+        catalog: null,
+        schema: null,
+        table_name: null,
+      };
+    case DatasetActionType.SelectCatalog:
+      return {
+        ...trimmedState,
+        [action.payload.name]: action.payload.value,
         schema: null,
         table_name: null,
       };
@@ -112,7 +120,9 @@ export default function AddDataset() {
     <DatasetPanel
       tableName={dataset?.table_name}
       dbId={dataset?.db?.id}
+      catalog={dataset?.catalog}
       schema={dataset?.schema}
+      database={dataset?.db}
       setHasColumns={setHasColumns}
       datasets={datasets}
     />

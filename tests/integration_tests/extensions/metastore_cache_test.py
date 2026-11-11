@@ -16,24 +16,26 @@
 # under the License.
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timedelta
-from typing import Any, TYPE_CHECKING
+from threading import Barrier
+from typing import Any
 from uuid import UUID
 
 import pytest
 from flask.ctx import AppContext
 from freezegun import freeze_time
 
-from superset.key_value.exceptions import KeyValueCodecEncodeException
+from superset.extensions.metastore_cache import SupersetMetastoreCache
+from superset.key_value.exceptions import (
+    KeyValueCreateFailedError,
+)
 from superset.key_value.types import (
     JsonKeyValueCodec,
     KeyValueCodec,
     PickleKeyValueCodec,
 )
-
-if TYPE_CHECKING:
-    from superset.extensions.metastore_cache import SupersetMetastoreCache
 
 NAMESPACE = UUID("ee173d1b-ccf3-40aa-941c-985c15224496")
 
@@ -47,8 +49,6 @@ SECOND_VALUE = "qwerty"
 
 @pytest.fixture
 def cache() -> SupersetMetastoreCache:
-    from superset.extensions.metastore_cache import SupersetMetastoreCache
-
     return SupersetMetastoreCache(
         namespace=NAMESPACE,
         default_timeout=600,
@@ -57,9 +57,14 @@ def cache() -> SupersetMetastoreCache:
 
 
 def test_caching_flow(app_context: AppContext, cache: SupersetMetastoreCache) -> None:
+    # Clean up any existing keys first to ensure idempotency
+    cache.delete(FIRST_KEY)
+    cache.delete(SECOND_KEY)
+
     assert cache.has(FIRST_KEY) is False
     assert cache.add(FIRST_KEY, FIRST_KEY_INITIAL_VALUE) is True
     assert cache.has(FIRST_KEY) is True
+    assert cache.get(FIRST_KEY) == FIRST_KEY_INITIAL_VALUE
     cache.set(SECOND_KEY, SECOND_VALUE)
     assert cache.get(FIRST_KEY) == FIRST_KEY_INITIAL_VALUE
     assert cache.get(SECOND_KEY) == SECOND_VALUE
@@ -73,19 +78,119 @@ def test_caching_flow(app_context: AppContext, cache: SupersetMetastoreCache) ->
     assert cache.has(SECOND_KEY)
     assert cache.get(SECOND_KEY) == SECOND_VALUE
 
+    # Clean up after test as well for good measure
+    cache.delete(SECOND_KEY)
+
 
 def test_expiry(app_context: AppContext, cache: SupersetMetastoreCache) -> None:
+    # Clean up any existing keys first to ensure idempotency
+    cache.delete(FIRST_KEY)
+
     delta = timedelta(days=90)
     dttm = datetime(2022, 3, 18, 0, 0, 0)
+
+    # 1. initialize cached values, ensure they're found
     with freeze_time(dttm):
-        cache.set(FIRST_KEY, FIRST_KEY_INITIAL_VALUE, int(delta.total_seconds()))
+        assert (
+            cache.set(FIRST_KEY, FIRST_KEY_INITIAL_VALUE, int(delta.total_seconds()))
+            is True
+        )
         assert cache.get(FIRST_KEY) == FIRST_KEY_INITIAL_VALUE
+
+    # 2. ensure cached values are available a moment before expiration
     with freeze_time(dttm + delta - timedelta(seconds=1)):
-        assert cache.has(FIRST_KEY)
+        assert cache.has(FIRST_KEY) is True
         assert cache.get(FIRST_KEY) == FIRST_KEY_INITIAL_VALUE
+
+    # 3. ensure cached entries expire
     with freeze_time(dttm + delta + timedelta(seconds=1)):
         assert cache.has(FIRST_KEY) is False
         assert cache.get(FIRST_KEY) is None
+
+        # adding a value with the same key as an expired entry works
+        assert cache.add(FIRST_KEY, SECOND_VALUE, int(delta.total_seconds())) is True
+        assert cache.get(FIRST_KEY) == SECOND_VALUE
+
+    # Clean up after test as well for good measure
+    cache.delete(FIRST_KEY)
+
+
+def test_compare_and_set(
+    app_context: AppContext,
+    cache: SupersetMetastoreCache,
+) -> None:
+    """Only the caller holding the observed value may replace it."""
+
+    cache.delete(FIRST_KEY)
+
+    assert cache.compare_and_set(FIRST_KEY, FIRST_KEY_INITIAL_VALUE, None) is True
+    assert cache.compare_and_set(FIRST_KEY, SECOND_VALUE, {"wrong": "value"}) is False
+    assert cache.get(FIRST_KEY) == FIRST_KEY_INITIAL_VALUE
+    assert (
+        cache.compare_and_set(
+            FIRST_KEY,
+            FIRST_KEY_UPDATED_VALUE,
+            FIRST_KEY_INITIAL_VALUE,
+        )
+        is True
+    )
+    assert cache.get(FIRST_KEY) == FIRST_KEY_UPDATED_VALUE
+
+    cache.delete(FIRST_KEY)
+
+
+def test_compare_and_set_treats_expired_entry_as_absent(
+    app_context: AppContext,
+    cache: SupersetMetastoreCache,
+) -> None:
+    """An expired pointer cannot satisfy a stale producer's comparison."""
+
+    cache.delete(FIRST_KEY)
+    dttm = datetime(2022, 3, 18, 0, 0, 0)
+
+    with freeze_time(dttm):
+        assert cache.set(FIRST_KEY, FIRST_KEY_INITIAL_VALUE, timeout=1) is True
+
+    with freeze_time(dttm + timedelta(seconds=2)):
+        assert (
+            cache.compare_and_set(
+                FIRST_KEY,
+                FIRST_KEY_UPDATED_VALUE,
+                FIRST_KEY_INITIAL_VALUE,
+            )
+            is False
+        )
+        assert cache.compare_and_set(FIRST_KEY, SECOND_VALUE, None) is True
+        assert cache.get(FIRST_KEY) == SECOND_VALUE
+
+    cache.delete(FIRST_KEY)
+
+
+def test_compare_and_set_allows_one_concurrent_successor(
+    app_context: AppContext,
+    cache: SupersetMetastoreCache,
+) -> None:
+    """Two producers observing one value cannot both replace it."""
+
+    cache.delete(FIRST_KEY)
+    assert cache.set(FIRST_KEY, FIRST_KEY_INITIAL_VALUE) is True
+    barrier = Barrier(2)
+
+    def replace(value: str) -> bool:
+        with app_context.app.app_context():
+            barrier.wait()
+            return cache.compare_and_set(
+                FIRST_KEY,
+                value,
+                FIRST_KEY_INITIAL_VALUE,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(replace, (FIRST_KEY_UPDATED_VALUE, SECOND_VALUE)))
+
+    assert sorted(results) == [False, True]
+    assert cache.get(FIRST_KEY) in (FIRST_KEY_UPDATED_VALUE, SECOND_VALUE)
+    cache.delete(FIRST_KEY)
 
 
 @pytest.mark.parametrize(
@@ -93,7 +198,7 @@ def test_expiry(app_context: AppContext, cache: SupersetMetastoreCache) -> None:
     [
         ({"foo": "bar"}, JsonKeyValueCodec(), {"foo": "bar"}),
         (("foo", "bar"), JsonKeyValueCodec(), ["foo", "bar"]),
-        (complex(1, 1), JsonKeyValueCodec(), KeyValueCodecEncodeException()),
+        (complex(1, 1), JsonKeyValueCodec(), KeyValueCreateFailedError()),
         ({"foo": "bar"}, PickleKeyValueCodec(), {"foo": "bar"}),
         (("foo", "bar"), PickleKeyValueCodec(), ("foo", "bar")),
         (complex(1, 1), PickleKeyValueCodec(), complex(1, 1)),
@@ -112,6 +217,10 @@ def test_codec(
         default_timeout=600,
         codec=codec,
     )
+
+    # Clean up any existing keys first to ensure idempotency
+    cache.delete(FIRST_KEY)
+
     cm = (
         pytest.raises(type(expected_result))
         if isinstance(expected_result, Exception)
@@ -120,3 +229,6 @@ def test_codec(
     with cm:
         cache.set(FIRST_KEY, input_)
         assert cache.get(FIRST_KEY) == expected_result
+
+    # Clean up after test as well for good measure
+    cache.delete(FIRST_KEY)

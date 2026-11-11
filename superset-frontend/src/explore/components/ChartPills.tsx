@@ -16,26 +16,40 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { forwardRef, RefObject } from 'react';
-import { css, QueryData, SupersetTheme } from '@superset-ui/core';
-import RowCountLabel from 'src/explore/components/RowCountLabel';
-import CachedLabel from 'src/components/CachedLabel';
-import Timer from 'src/components/Timer';
-import { Type } from 'src/components/Label';
+import { forwardRef, RefObject } from 'react';
+import { QueryData, VizType } from '@superset-ui/core';
+import { t } from '@apache-superset/core/translation';
+import { css, SupersetTheme } from '@apache-superset/core/theme';
+import {
+  Button,
+  CachedLabel,
+  type LabelType,
+  Timer,
+} from '@superset-ui/core/components';
+import RowCountLabel from 'src/components/RowCountLabel';
 
 const CHART_STATUS_MAP = {
-  failed: 'danger' as Type,
-  loading: 'warning' as Type,
-  success: 'success' as Type,
+  failed: 'danger' as LabelType,
+  loading: 'warning' as LabelType,
+  success: 'success' as LabelType,
+  rendered: 'default' as LabelType,
+  stopped: 'danger' as LabelType,
+  unknown: 'default' as LabelType,
 };
 
 export type ChartPillsProps = {
-  queriesResponse: QueryData[];
-  chartStatus: keyof typeof CHART_STATUS_MAP;
+  queriesResponse?: QueryData[];
+  chartStatus?: keyof typeof CHART_STATUS_MAP;
   chartUpdateStartTime: number;
-  chartUpdateEndTime: number;
+  chartUpdateEndTime?: number;
   refreshCachedQuery: () => void;
-  rowLimit: string | number;
+  rowLimit?: string | number;
+  hideRowCount?: boolean;
+  formData?: {
+    viz_type?: string;
+    server_pagination?: boolean;
+    [key: string]: unknown;
+  };
 };
 
 export const ChartPills = forwardRef(
@@ -47,40 +61,84 @@ export const ChartPills = forwardRef(
       chartUpdateEndTime,
       refreshCachedQuery,
       rowLimit,
+      hideRowCount = false,
+      formData,
     }: ChartPillsProps,
     ref: RefObject<HTMLDivElement>,
   ) => {
     const isLoading = chartStatus === 'loading';
     const firstQueryResponse = queriesResponse?.[0];
+    const hasSemanticHit = queriesResponse?.some(response =>
+      ['HIT', 'MIXED'].includes(response.semantic_cache_status ?? ''),
+    );
+    const hasSemanticMiss = queriesResponse?.some(
+      response => response.semantic_cache_status !== 'HIT',
+    );
+    const semanticCacheStatus = hasSemanticHit
+      ? hasSemanticMiss
+        ? 'MIXED'
+        : 'HIT'
+      : 'MISS';
+
+    // For table charts with server pagination, check second query for total count
+    const isTableChart =
+      formData?.viz_type === VizType.Table ||
+      formData?.viz_type === VizType.TableAgGrid;
+    const hasCountQuery = queriesResponse && queriesResponse.length > 1;
+    const countFromSecondQuery = hasCountQuery
+      ? queriesResponse[1]?.data?.[0]?.rowcount
+      : null;
+
+    const actualRowCount =
+      isTableChart && countFromSecondQuery != null
+        ? countFromSecondQuery
+        : Number(
+            firstQueryResponse?.sql_rowcount ??
+              firstQueryResponse?.rowcount ??
+              0,
+          );
+
     return (
       <div ref={ref}>
         <div
           css={(theme: SupersetTheme) => css`
             display: flex;
             justify-content: flex-end;
-            padding-bottom: ${theme.gridUnit * 4}px;
-            & .ant-tag:last-of-type {
-              margin: 0;
-            }
+            padding-bottom: ${theme.sizeUnit * 4}px;
           `}
         >
-          {!isLoading && firstQueryResponse && (
+          {!isLoading && !hideRowCount && firstQueryResponse && (
             <RowCountLabel
-              rowcount={Number(firstQueryResponse.sql_rowcount) || 0}
-              limit={Number(rowLimit) || 0}
+              rowcount={actualRowCount}
+              limit={Number(rowLimit ?? 0)}
             />
           )}
-          {!isLoading && firstQueryResponse?.is_cached && (
-            <CachedLabel
+          {!isLoading &&
+            semanticCacheStatus !== 'MIXED' &&
+            (firstQueryResponse?.is_cached ||
+              semanticCacheStatus === 'HIT') && (
+              <CachedLabel
+                onClick={refreshCachedQuery}
+                cachedTimestamp={firstQueryResponse?.cached_dttm}
+                cacheSource={
+                  semanticCacheStatus === 'HIT' ? 'semantic' : 'result'
+                }
+              />
+            )}
+          {!isLoading && semanticCacheStatus === 'MIXED' && (
+            <Button
+              buttonStyle="link"
+              buttonSize="small"
               onClick={refreshCachedQuery}
-              cachedTimestamp={firstQueryResponse.cached_dttm}
-            />
+            >
+              {t('Mixed cache')}
+            </Button>
           )}
           <Timer
             startTime={chartUpdateStartTime}
             endTime={chartUpdateEndTime}
             isRunning={isLoading}
-            status={CHART_STATUS_MAP[chartStatus]}
+            status={CHART_STATUS_MAP[chartStatus ?? 'unknown']}
           />
         </div>
       </div>

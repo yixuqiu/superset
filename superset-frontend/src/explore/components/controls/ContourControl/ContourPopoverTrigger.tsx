@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import ContourPopoverControl from './ContourPopoverControl';
 import ControlPopover from '../ControlPopover/ControlPopover';
 import { ContourPopoverTriggerProps } from './types';
@@ -47,12 +47,15 @@ const ContourPopoverTrigger = ({
     <ControlPopover
       trigger="click"
       content={popoverContent}
-      defaultVisible={visible}
-      visible={visible}
-      onVisibleChange={setVisibility}
-      destroyTooltipOnHide
+      defaultOpen={visible}
+      open={visible}
+      onOpenChange={setVisibility}
+      destroyOnHidden
     >
-      {props.children}
+      {/* Keep a ref-compatible, block-width anchor even when the add-new
+          placeholder has zero height. Right placement depends on its width,
+          not on adding artificial height (sc-120502). */}
+      <span style={{ display: 'block' }}>{props.children}</span>
     </ControlPopover>
   );
 };

@@ -16,18 +16,43 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { Link, useHistory } from 'react-router-dom';
-import { isFeatureEnabled, FeatureFlag, t, useTheme } from '@superset-ui/core';
-import { CardStyles } from 'src/views/CRUD/utils';
-import { AntdDropdown } from 'src/components';
-import { Menu } from 'src/components/Menu';
-import ListViewCard from 'src/components/ListViewCard';
-import Icons from 'src/components/Icons';
-import Label from 'src/components/Label';
-import FacePile from 'src/components/FacePile';
-import FaveStar from 'src/components/FaveStar';
+import { t } from '@apache-superset/core/translation';
+import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
+import { styled } from '@apache-superset/core/theme';
+import { CardStyles, isNavigationHandledByLink } from 'src/views/CRUD/utils';
+import {
+  FaveStar,
+  Icons,
+  PublishedLabel,
+  ListViewCard,
+  Tooltip,
+} from '@superset-ui/core/components';
+import { MenuItem } from '@superset-ui/core/components/Menu';
 import { Dashboard } from 'src/views/CRUD/types';
+import { assetUrl } from 'src/utils/assetUrl';
+import { deleteActionLabel } from 'src/utils/softDeleteCopy';
+import { SubjectPile } from 'src/features/subjects/SubjectPile';
+import { KebabMenuButton } from 'src/components';
+import { isUserEditorOrAdmin } from 'src/dashboard/util/permissionUtils';
+import type { UserWithPermissionsAndRoles } from 'src/types/bootstrapTypes';
+import { useIsMobile } from 'src/hooks/useIsMobile';
+
+const MenuItemButton = styled.button`
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  &:disabled {
+    cursor: not-allowed;
+  }
+`;
 
 interface DashboardCardProps {
   isChart?: boolean;
@@ -38,7 +63,7 @@ interface DashboardCardProps {
   openDashboardEditModal?: (d: Dashboard) => void;
   saveFavoriteStatus: (id: number, isStarred: boolean) => void;
   favoriteStatus: boolean;
-  userId?: string | number;
+  user?: UserWithPermissionsAndRoles;
   showThumbnails?: boolean;
   handleBulkDashboardExport: (dashboardsToExport: Dashboard[]) => void;
   onDelete: (dashboard: Dashboard) => void;
@@ -48,7 +73,7 @@ function DashboardCard({
   dashboard,
   hasPerm,
   bulkSelectEnabled,
-  userId,
+  user,
   openDashboardEditModal,
   favoriteStatus,
   saveFavoriteStatus,
@@ -56,59 +81,118 @@ function DashboardCard({
   handleBulkDashboardExport,
   onDelete,
 }: DashboardCardProps) {
+  const userId = user?.userId;
+  const isMobile = useIsMobile();
+
   const history = useHistory();
   const canEdit = hasPerm('can_write');
   const canDelete = hasPerm('can_write');
+  const softDelete = isFeatureEnabled(FeatureFlag.SoftDelete);
   const canExport = hasPerm('can_export');
-
-  const theme = useTheme();
-  const menu = (
-    <Menu>
-      {canEdit && openDashboardEditModal && (
-        <Menu.Item>
-          <div
-            role="button"
-            tabIndex={0}
-            className="action-button"
-            onClick={() => openDashboardEditModal?.(dashboard)}
-            data-test="dashboard-card-option-edit-button"
-          >
-            <Icons.EditAlt iconSize="l" data-test="edit-alt" /> {t('Edit')}
-          </div>
-        </Menu.Item>
-      )}
-      {canExport && (
-        <Menu.Item>
-          <div
-            role="button"
-            tabIndex={0}
-            onClick={() => handleBulkDashboardExport([dashboard])}
-            className="action-button"
-            data-test="dashboard-card-option-export-button"
-          >
-            <Icons.Share iconSize="l" /> {t('Export')}
-          </div>
-        </Menu.Item>
-      )}
-      {canDelete && (
-        <Menu.Item>
-          <div
-            role="button"
-            tabIndex={0}
-            className="action-button"
-            onClick={() => onDelete(dashboard)}
-            data-test="dashboard-card-option-delete-button"
-          >
-            <Icons.Trash iconSize="l" /> {t('Delete')}
-          </div>
-        </Menu.Item>
-      )}
-    </Menu>
+  const allowEdit = isUserEditorOrAdmin(
+    user,
+    dashboard.editors,
+    dashboard.extra_editors,
   );
+  const digest = dashboard.changed_on_utc || dashboard.changed_on;
+  const thumbnailUrl =
+    isFeatureEnabled(FeatureFlag.Thumbnails) && dashboard.id && digest
+      ? `/api/v1/dashboard/${dashboard.id}/thumbnail/${encodeURIComponent(digest)}/`
+      : '';
+
+  const menuItems: MenuItem[] = [];
+  const editPermissionHint = allowEdit
+    ? null
+    : t(
+        'You must be a dashboard editor in order to edit. Please reach out to a dashboard editor to request modifications or edit access.',
+      );
+  const deletePermissionHint = allowEdit
+    ? null
+    : softDelete
+      ? t(
+          'You must be a dashboard editor in order to archive. Please reach out to a dashboard editor to request modifications or edit access.',
+        )
+      : t(
+          'You must be a dashboard editor in order to delete. Please reach out to a dashboard editor to request modifications or edit access.',
+        );
+
+  if (canEdit && openDashboardEditModal) {
+    menuItems.push({
+      key: 'edit',
+      label: (
+        <Tooltip
+          placement="right"
+          trigger={['hover', 'focus']}
+          title={editPermissionHint}
+        >
+          <span>
+            <MenuItemButton
+              type="button"
+              className="action-button"
+              onClick={
+                allowEdit ? () => openDashboardEditModal(dashboard) : undefined
+              }
+              data-test="dashboard-card-option-edit-button"
+              disabled={!allowEdit}
+              aria-disabled={!allowEdit}
+            >
+              <Icons.EditOutlined iconSize="l" data-test="edit-alt" />{' '}
+              {t('Edit')}
+            </MenuItemButton>
+          </span>
+        </Tooltip>
+      ),
+      disabled: !allowEdit,
+    });
+  }
+
+  if (canExport) {
+    menuItems.push({
+      key: 'export',
+      label: (
+        <MenuItemButton
+          type="button"
+          onClick={() => handleBulkDashboardExport([dashboard])}
+          className="action-button"
+          data-test="dashboard-card-option-export-button"
+        >
+          <Icons.UploadOutlined iconSize="l" /> {t('Export')}
+        </MenuItemButton>
+      ),
+    });
+  }
+
+  if (canDelete) {
+    menuItems.push({
+      key: 'delete',
+      label: (
+        <Tooltip
+          placement="right"
+          trigger={['hover', 'focus']}
+          title={deletePermissionHint}
+        >
+          <span>
+            <MenuItemButton
+              type="button"
+              className="action-button"
+              onClick={allowEdit ? () => onDelete(dashboard) : undefined}
+              disabled={!allowEdit}
+              aria-disabled={!allowEdit}
+              data-test="dashboard-card-option-delete-button"
+            >
+              <Icons.DeleteOutlined iconSize="l" /> {deleteActionLabel()}
+            </MenuItemButton>
+          </span>
+        </Tooltip>
+      ),
+      disabled: !allowEdit,
+    });
+  }
+
   return (
     <CardStyles
-      onClick={() => {
-        if (!bulkSelectEnabled) {
+      onClick={event => {
+        if (!bulkSelectEnabled && !isNavigationHandledByLink(event)) {
           history.push(dashboard.url);
         }
       }}
@@ -118,9 +202,7 @@ function DashboardCard({
         title={dashboard.dashboard_title}
         certifiedBy={dashboard.certified_by}
         certificationDetails={dashboard.certification_details}
-        titleRight={
-          <Label>{dashboard.published ? t('published') : t('draft')}</Label>
-        }
+        titleRight={<PublishedLabel isPublished={dashboard.published} />}
         cover={
           !isFeatureEnabled(FeatureFlag.Thumbnails) || !showThumbnails ? (
             <></>
@@ -128,10 +210,12 @@ function DashboardCard({
         }
         url={bulkSelectEnabled ? undefined : dashboard.url}
         linkComponent={Link}
-        imgURL={dashboard.thumbnail_url}
-        imgFallbackURL="/static/assets/images/dashboard-card-fallback.svg"
+        imgURL={thumbnailUrl}
+        imgFallbackURL={assetUrl(
+          '/static/assets/images/dashboard-card-fallback.svg',
+        )}
         description={t('Modified %s', dashboard.changed_on_delta_humanized)}
-        coverLeft={<FacePile users={dashboard.owners || []} />}
+        coverLeft={<SubjectPile subjects={dashboard.editors || []} />}
         actions={
           <ListViewCard.Actions
             onClick={e => {
@@ -146,9 +230,23 @@ function DashboardCard({
                 isStarred={favoriteStatus}
               />
             )}
-            <AntdDropdown overlay={menu}>
-              <Icons.MoreVert iconColor={theme.colors.grayscale.base} />
-            </AntdDropdown>
+            {!isMobile && (
+              <KebabMenuButton
+                menuItems={menuItems}
+                dataTest="dashboard-card-menu"
+                tooltipTitle={
+                  !allowEdit &&
+                  ((canEdit && openDashboardEditModal) || canDelete) ? (
+                    <>
+                      {canEdit && openDashboardEditModal && (
+                        <div>{editPermissionHint}</div>
+                      )}
+                      {canDelete && <div>{deletePermissionHint}</div>}
+                    </>
+                  ) : undefined
+                }
+              />
+            )}
           </ListViewCard.Actions>
         }
       />

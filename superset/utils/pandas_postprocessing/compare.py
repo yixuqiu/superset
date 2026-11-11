@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+from decimal import DivisionByZero, InvalidOperation, localcontext
 from typing import Optional
 
 import pandas as pd
@@ -59,18 +60,23 @@ def compare(  # pylint: disable=too-many-arguments
     if len(source_columns) == 0:
         return df
 
-    for s_col, c_col in zip(source_columns, compare_columns):
+    for s_col, c_col in zip(source_columns, compare_columns, strict=False):
         s_df = df.loc[:, [s_col]]
         s_df.rename(columns={s_col: "__intermediate"}, inplace=True)
         c_df = df.loc[:, [c_col]]
         c_df.rename(columns={c_col: "__intermediate"}, inplace=True)
         if compare_type == PandasPostprocessingCompare.DIFF:
             diff_df = s_df - c_df
-        elif compare_type == PandasPostprocessingCompare.PCT:
-            diff_df = ((s_df - c_df) / c_df).astype(float).round(precision)
         else:
-            # compare_type == "ratio"
-            diff_df = (s_df / c_df).astype(float).round(precision)
+            # Match float zero-division results while preserving Decimal arithmetic.
+            with localcontext() as context:
+                context.traps[DivisionByZero] = False
+                context.traps[InvalidOperation] = False
+                if compare_type == PandasPostprocessingCompare.PCT:
+                    diff_df = ((s_df - c_df) / c_df).astype(float).round(precision)
+                else:
+                    # compare_type == "ratio"
+                    diff_df = (s_df / c_df).astype(float).round(precision)
 
         diff_df.rename(
             columns={
@@ -81,5 +87,10 @@ def compare(  # pylint: disable=too-many-arguments
         df = pd.concat([df, diff_df], axis=1)
 
     if drop_original_columns:
-        df = df.drop(source_columns + compare_columns, axis=1)
+        level = (
+            0
+            if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels > 1
+            else None
+        )
+        df = df.drop(source_columns + compare_columns, axis=1, level=level)
     return df

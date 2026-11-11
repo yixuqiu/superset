@@ -14,24 +14,25 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-import json
 import logging
 from datetime import datetime
 from io import BytesIO
 from typing import Any
 from zipfile import is_zipfile, ZipFile
 
-from flask import g, request, Response, send_file
-from flask_appbuilder.api import expose, protect, rison, safe
+from flask import g, request, Response
+from flask_appbuilder.api import expose, protect, rison as parse_rison, safe
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import ngettext
 
-from superset import is_feature_enabled
 from superset.commands.importers.exceptions import (
     IncorrectFormatError,
     NoValidFilesFoundError,
 )
-from superset.commands.importers.v1.utils import get_contents_from_bundle
+from superset.commands.importers.v1.utils import (
+    get_contents_from_bundle,
+    open_import_bundle,
+)
 from superset.commands.query.delete import DeleteSavedQueryCommand
 from superset.commands.query.exceptions import (
     SavedQueryDeleteFailedError,
@@ -47,18 +48,24 @@ from superset.queries.saved_queries.filters import (
     SavedQueryAllTextFilter,
     SavedQueryFavoriteFilter,
     SavedQueryFilter,
-    SavedQueryTagFilter,
+    SavedQueryTagIdFilter,
+    SavedQueryTagNameFilter,
 )
 from superset.queries.saved_queries.schemas import (
     get_delete_ids_schema,
     get_export_ids_schema,
     openapi_spec_methods_override,
+    validate_label,
 )
+from superset.utils.core import send_export_zip, write_zip_entry
 from superset.views.base_api import (
     BaseSupersetModelRestApi,
+    parse_json_form_field,
+    RelatedFieldFilter,
     requires_form_data,
     statsd_metrics,
 )
+from superset.views.filters import BaseFilterRelatedUsers, FilterRelatedUsers
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +102,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "description",
         "id",
         "label",
+        "catalog",
         "schema",
         "sql",
         "sql_tables",
@@ -119,23 +127,28 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "label",
         "last_run_delta_humanized",
         "rows",
+        "catalog",
         "schema",
         "sql",
         "sql_tables",
+        "tags.id",
+        "tags.name",
+        "tags.type",
     ]
-    if is_feature_enabled("TAGGING_SYSTEM"):
-        list_columns += ["tags.id", "tags.name", "tags.type"]
     list_select_columns = list_columns + ["changed_by_fk", "changed_on"]
     add_columns = [
         "db_id",
         "description",
         "label",
+        "catalog",
         "schema",
         "sql",
         "template_parameters",
+        "extra_json",
     ]
     edit_columns = add_columns
     order_columns = [
+        "catalog",
         "schema",
         "label",
         "description",
@@ -148,15 +161,21 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "last_run_delta_humanized",
     ]
 
-    search_columns = ["id", "database", "label", "schema", "created_by", "changed_by"]
-    if is_feature_enabled("TAGGING_SYSTEM"):
-        search_columns += ["tags"]
+    search_columns = [
+        "id",
+        "database",
+        "label",
+        "catalog",
+        "schema",
+        "created_by",
+        "changed_by",
+        "tags",
+    ]
     search_filters = {
         "id": [SavedQueryFavoriteFilter],
         "label": [SavedQueryAllTextFilter],
+        "tags": [SavedQueryTagNameFilter, SavedQueryTagIdFilter],
     }
-    if is_feature_enabled("TAGGING_SYSTEM"):
-        search_filters["tags"] = [SavedQueryTagFilter]
 
     apispec_parameter_schemas = {
         "get_delete_ids_schema": get_delete_ids_schema,
@@ -167,13 +186,23 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
 
     related_field_filters = {
         "database": "database_name",
+        "changed_by": RelatedFieldFilter("first_name", FilterRelatedUsers),
+        "created_by": RelatedFieldFilter("first_name", FilterRelatedUsers),
     }
-    base_related_field_filters = {"database": [["id", DatabaseFilter, lambda: []]]}
+    base_related_field_filters = {
+        "database": [["id", DatabaseFilter, lambda: []]],
+        "changed_by": [["id", BaseFilterRelatedUsers, lambda: []]],
+        "created_by": [["id", BaseFilterRelatedUsers, lambda: []]],
+    }
     allowed_rel_fields = {"database", "changed_by", "created_by"}
-    allowed_distinct_fields = {"schema"}
+    allowed_distinct_fields = {"catalog", "schema"}
+
+    validators_columns = {"label": validate_label}
 
     def pre_add(self, item: SavedQuery) -> None:
         item.user = g.user
+        if item.label:
+            item.label = item.label.strip()
 
     def pre_update(self, item: SavedQuery) -> None:
         self.pre_add(item)
@@ -182,7 +211,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
     @protect()
     @safe
     @statsd_metrics
-    @rison(get_delete_ids_schema)
+    @parse_rison(get_delete_ids_schema)
     def bulk_delete(self, **kwargs: Any) -> Response:
         """Bulk delete saved queries.
         ---
@@ -234,7 +263,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
     @protect()
     @safe
     @statsd_metrics
-    @rison(get_export_ids_schema)
+    @parse_rison(get_export_ids_schema)
     def export(self, **kwargs: Any) -> Response:
         """Download multiple saved queries as YAML files.
         ---
@@ -275,21 +304,14 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
                 for file_name, file_content in ExportSavedQueriesCommand(
                     requested_ids
                 ).run():
-                    with bundle.open(f"{root}/{file_name}", "w") as fp:
-                        fp.write(file_content().encode())
+                    write_zip_entry(
+                        bundle, f"{root}/{file_name}", file_content().encode()
+                    )
             except SavedQueryNotFoundError:
                 return self.response_404()
         buf.seek(0)
 
-        response = send_file(
-            buf,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name=filename,
-        )
-        if token := request.args.get("token"):
-            response.set_cookie(token, "done", max_age=600)
-        return response
+        return send_export_zip(buf, filename)
 
     @expose("/import/", methods=("POST",))
     @protect()
@@ -297,6 +319,8 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
     @event_logger.log_this_with_context(
         action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.import_",
         log_to_statsd=False,
+        # The form carries secrets.
+        include_request_data=False,
     )
     @requires_form_data
     def import_(self) -> Response:
@@ -350,6 +374,13 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
                         the private_key should be provided in the following format:
                         `{"databases/MyDatabase.yaml": "my_private_key_password"}`.
                       type: string
+                    encrypted_extra_secrets:
+                      description: >-
+                        JSON map of sensitive values for masked_encrypted_extra fields
+                        of featured databases. Keys are file paths (e.g.,
+                        "databases/db.yaml") and values are JSON objects mapping
+                        JSONPath expressions to secrets.
+                      type: string
           responses:
             200:
               description: Saved Query import result
@@ -374,33 +405,20 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
             return self.response_400()
         if not is_zipfile(upload):
             raise IncorrectFormatError("Not a ZIP file")
-        with ZipFile(upload) as bundle:
+        with open_import_bundle(upload) as bundle:
             contents = get_contents_from_bundle(bundle)
 
         if not contents:
             raise NoValidFilesFoundError()
 
-        passwords = (
-            json.loads(request.form["passwords"])
-            if "passwords" in request.form
-            else None
-        )
+        passwords = parse_json_form_field("passwords")
         overwrite = request.form.get("overwrite") == "true"
-        ssh_tunnel_passwords = (
-            json.loads(request.form["ssh_tunnel_passwords"])
-            if "ssh_tunnel_passwords" in request.form
-            else None
+        ssh_tunnel_passwords = parse_json_form_field("ssh_tunnel_passwords")
+        ssh_tunnel_private_keys = parse_json_form_field("ssh_tunnel_private_keys")
+        ssh_tunnel_priv_key_passwords = parse_json_form_field(
+            "ssh_tunnel_private_key_passwords"
         )
-        ssh_tunnel_private_keys = (
-            json.loads(request.form["ssh_tunnel_private_keys"])
-            if "ssh_tunnel_private_keys" in request.form
-            else None
-        )
-        ssh_tunnel_priv_key_passwords = (
-            json.loads(request.form["ssh_tunnel_private_key_passwords"])
-            if "ssh_tunnel_private_key_passwords" in request.form
-            else None
-        )
+        encrypted_extra_secrets = parse_json_form_field("encrypted_extra_secrets")
 
         command = ImportSavedQueriesCommand(
             contents,
@@ -409,6 +427,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
             ssh_tunnel_passwords=ssh_tunnel_passwords,
             ssh_tunnel_private_keys=ssh_tunnel_private_keys,
             ssh_tunnel_priv_key_passwords=ssh_tunnel_priv_key_passwords,
+            encrypted_extra_secrets=encrypted_extra_secrets,
         )
         command.run()
         return self.response(200, message="OK")

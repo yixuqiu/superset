@@ -22,15 +22,15 @@ Create Date: 2019-10-10 13:52:54.544475
 
 """
 
-import json
 import logging
 
 from alembic import op
 from sqlalchemy import Column, Integer, Text
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 
 from superset import db
 from superset.legacy import update_time_range
+from superset.utils import json
 
 # revision identifiers, used by Alembic.
 revision = "1495eb914ad3"

@@ -16,27 +16,37 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
+import { GenericDataType } from '@apache-superset/core/common';
 import { TimeseriesDataRecord } from '../../chart';
 import { AnnotationData } from './AnnotationLayer';
 
 /**
- * Generic data types, see enum of the same name in superset/utils/core.py.
- */
-export enum GenericDataType {
-  Numeric = 0,
-  String = 1,
-  Temporal = 2,
-  Boolean = 3,
-}
-
-/**
  * Primitive types for data field values.
  */
-export type DataRecordValue = number | string | boolean | Date | null;
+export type DataRecordValue = number | string | boolean | Date | null | bigint;
+
+/**
+ * Semantic containment-cache provenance of one query: HIT when every semantic
+ * query behind it (main plus time offsets) was served from containment, MISS
+ * when none was, MIXED when only some were.
+ */
+export type SemanticCacheStatus = 'HIT' | 'MISS' | 'MIXED';
 
 export interface DataRecord {
   [key: string]: DataRecordValue;
+}
+
+export interface ChartDataQueryTiming {
+  query_planning_ms: number | null;
+  cache_resolution_ms: number | null;
+  data_acquisition_ms: number | null;
+  payload_assembly_ms: number | null;
+  total_ms: number;
+}
+
+export interface ChartDataTiming {
+  version: 1;
+  query: ChartDataQueryTiming;
 }
 
 /**
@@ -52,6 +62,11 @@ export interface ChartDataResponseResult {
   cache_timeout: number | null;
   cached_dttm: string | null;
   /**
+   * UTC timestamp when the query was executed (ISO 8601 format).
+   * For cached queries, this is when the original query ran.
+   */
+  queried_dttm: string | null;
+  /**
    * Array of data records as dictionary
    */
   data: DataRecord[];
@@ -65,6 +80,7 @@ export interface ChartDataResponseResult {
   coltypes: GenericDataType[];
   error: string | null;
   is_cached: boolean;
+  semantic_cache_status?: SemanticCacheStatus | null;
   query: string;
   rowcount: number;
   sql_rowcount: number;
@@ -79,10 +95,23 @@ export interface ChartDataResponseResult {
     | 'timed_out';
   from_dttm: number | null;
   to_dttm: number | null;
+  // TODO(hainenber): define proper type for below attributes
+  rejected_filters?: any[];
+  applied_filters?: any[];
+  warning?: string | null;
+  /**
+   * Detected ISO 4217 currency code when AUTO mode is used.
+   * Returns the currency code if all filtered data contains a single currency,
+   * or null if multiple currencies are present.
+   */
+  detected_currency?: string | null;
+  /**
+   * Versioned query lifecycle timing in milliseconds.
+   */
+  timing?: ChartDataTiming;
 }
 
-export interface TimeseriesChartDataResponseResult
-  extends ChartDataResponseResult {
+export interface TimeseriesChartDataResponseResult extends ChartDataResponseResult {
   data: TimeseriesDataRecord[];
   label_map: Record<string, string[]>;
 }
@@ -93,5 +122,3 @@ export interface TimeseriesChartDataResponseResult
 export interface ChartDataResponse {
   queries: ChartDataResponseResult[];
 }
-
-export default {};

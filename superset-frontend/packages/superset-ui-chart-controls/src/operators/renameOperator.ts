@@ -25,62 +25,113 @@ import {
   getXAxisLabel,
 } from '@superset-ui/core';
 import { PostProcessingFactory } from './types';
-import { getMetricOffsetsMap, isTimeComparison } from './utils';
+import {
+  extractExtraMetrics,
+  getMetricOffsetsMap,
+  isTimeComparison,
+} from './utils';
+import { TIME_COMPARISON_SEPARATOR } from './utils/constants';
 
 export const renameOperator: PostProcessingFactory<PostProcessingRename> = (
   formData,
   queryObject,
 ) => {
   const metrics = ensureIsArray(queryObject.metrics);
+  // `queryObject` here is the base query object, before the "Sort By" extra
+  // metric (see extractExtraMetrics) is appended for the final request. That
+  // metric is still pivoted and offset-mapped like any other (see
+  // timeComparePivotOperator), so it has to count here too: otherwise a
+  // single-value-metric query with the sort metric labeled like a time
+  // offset (e.g. "1 year ago") gets its `metricWithOffset` column renamed to
+  // the bare offset label, colliding with that metric's own unrenamed base
+  // column of the same name.
+  const extraMetricLabels = extractExtraMetrics(formData)
+    .map(getMetricLabel)
+    .filter(label => !metrics.some(metric => getMetricLabel(metric) === label));
+  const metricCountWithExtras = metrics.length + extraMetricLabels.length;
   const columns = ensureIsArray(
     queryObject.series_columns || queryObject.columns,
   );
+  const timeOffsets = ensureIsArray(formData.time_compare);
   const { truncate_metric } = formData;
   const xAxisLabel = getXAxisLabel(formData);
+  const isTimeComparisonValue = isTimeComparison(formData, queryObject);
+
   // remove or rename top level of column name(metric name) in the MultiIndex when
-  // 1) only 1 metric
-  // 2) dimension exist
-  // 3) xAxis exist
-  // 4) time comparison exist, and comparison type is "actual values"
-  // 5) truncate_metric in form_data and truncate_metric is true
+  // 1) at least 1 metric
+  // 2) xAxis exist
+  // 3a) isTimeComparisonValue
+  // 3b-1) dimension exist or multiple time shift metrics exist
+  // 3b-2) truncate_metric in form_data and truncate_metric is true
   if (
-    metrics.length === 1 &&
-    columns.length > 0 &&
+    metrics.length > 0 &&
     xAxisLabel &&
-    !(
-      // todo: we should provide an approach to handle derived metrics
-      (
-        isTimeComparison(formData, queryObject) &&
-        [
-          ComparisonType.Difference,
-          ComparisonType.Ratio,
-          ComparisonType.Percentage,
-        ].includes(formData.comparison_type)
-      )
-    ) &&
-    truncate_metric !== undefined &&
-    !!truncate_metric
+    (isTimeComparisonValue ||
+      ((columns.length > 0 || timeOffsets.length > 1) &&
+        truncate_metric !== undefined &&
+        !!truncate_metric))
   ) {
     const renamePairs: [string, string | null][] = [];
-
     if (
       // "actual values" will add derived metric.
       // we will rename the "metric" from the metricWithOffset label
       // for example: "count__1 year ago" =>	"1 year ago"
-      isTimeComparison(formData, queryObject) &&
-      formData.comparison_type === ComparisonType.Values
+      isTimeComparisonValue
     ) {
       const metricOffsetMap = getMetricOffsetsMap(formData, queryObject);
       const timeOffsets = ensureIsArray(formData.time_compare);
-      [...metricOffsetMap.keys()].forEach(metricWithOffset => {
-        const offsetLabel = timeOffsets.find(offset =>
-          metricWithOffset.includes(offset),
-        );
-        renamePairs.push([metricWithOffset, offsetLabel]);
-      });
+      // Every metric (displayed or sort-only) keeps its own label at the top
+      // level of the pivot, so a rename target equal to one of them would make
+      // the backend `rename` fail with "Label already exists". Such a column
+      // keeps its unrenamed label instead.
+      const topLevelMetricLabels = new Set([
+        ...metrics.map(getMetricLabel),
+        ...extraMetricLabels,
+      ]);
+      [...metricOffsetMap.entries()].forEach(
+        ([metricWithOffset, metricOnly]) => {
+          const offsetLabel = timeOffsets.find(offset =>
+            metricWithOffset.endsWith(`${TIME_COMPARISON_SEPARATOR}${offset}`),
+          );
+          const target =
+            metricCountWithExtras > 1
+              ? `${metricOnly}, ${offsetLabel}`
+              : offsetLabel;
+          if (target !== undefined && topLevelMetricLabels.has(target)) {
+            return;
+          }
+          renamePairs.push([
+            formData.comparison_type === ComparisonType.Values
+              ? metricWithOffset
+              : [formData.comparison_type, metricOnly, metricWithOffset].join(
+                  TIME_COMPARISON_SEPARATOR,
+                ),
+            target,
+          ]);
+        },
+      );
     }
 
-    renamePairs.push([getMetricLabel(metrics[0]), null]);
+    if (
+      ![
+        ComparisonType.Difference,
+        ComparisonType.Percentage,
+        ComparisonType.Ratio,
+      ].includes(formData.comparison_type) &&
+      // the sort-only extra metric is hidden from rendering, so the displayed
+      // metric count decides whether the metric prefix is dropped here
+      metrics.length === 1 &&
+      // a comparison whose renames were all skipped for colliding with a
+      // metric label must not fall through to dropping the metric prefix
+      !isTimeComparisonValue &&
+      renamePairs.length === 0
+    ) {
+      renamePairs.push([getMetricLabel(metrics[0]), null]);
+    }
+
+    if (renamePairs.length === 0) {
+      return undefined;
+    }
 
     return {
       operation: 'rename',

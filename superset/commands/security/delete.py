@@ -16,15 +16,17 @@
 # under the License.
 
 import logging
+from functools import partial
 
 from superset.commands.base import BaseCommand
 from superset.commands.security.exceptions import (
     RLSRuleNotFoundError,
     RuleDeleteFailedError,
 )
-from superset.daos.exceptions import DAODeleteFailedError
+from superset.commands.security.utils import raise_for_datasource_access
+from superset.connectors.sqla.models import RowLevelSecurityFilter
 from superset.daos.security import RLSDAO
-from superset.reports.models import ReportSchedule
+from superset.utils.decorators import on_error, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +34,19 @@ logger = logging.getLogger(__name__)
 class DeleteRLSRuleCommand(BaseCommand):
     def __init__(self, model_ids: list[int]):
         self._model_ids = model_ids
-        self._models: list[ReportSchedule] = []
+        self._models: list[RowLevelSecurityFilter] = []
 
+    @transaction(on_error=partial(on_error, reraise=RuleDeleteFailedError))
     def run(self) -> None:
         self.validate()
-        try:
-            RLSDAO.delete(self._models)
-        except DAODeleteFailedError as ex:
-            logger.exception(ex.exception)
-            raise RuleDeleteFailedError() from ex
+        RLSDAO.delete(self._models)
 
     def validate(self) -> None:
         # Validate/populate model exists
         self._models = RLSDAO.find_by_ids(self._model_ids)
         if not self._models or len(self._models) != len(self._model_ids):
             raise RLSRuleNotFoundError()
+        # Apply the same datasource access check as create/update: a caller may
+        # only delete a rule if they can access every datasource it references.
+        for rule in self._models:
+            raise_for_datasource_access(rule.tables)

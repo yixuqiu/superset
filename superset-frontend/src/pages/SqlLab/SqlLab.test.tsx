@@ -17,8 +17,8 @@
  * under the License.
  */
 import fetchMock from 'fetch-mock';
-import React from 'react';
-import { omit } from 'lodash';
+import { isValidElement } from 'react';
+import { omit } from 'lodash-es';
 import {
   render,
   act,
@@ -48,6 +48,7 @@ const fakeApiResult = {
       lastName: 'last name',
       permissions: {},
       roles: {},
+      groups: [],
     },
   },
 };
@@ -56,7 +57,7 @@ const expectedResult = fakeApiResult.result;
 const sqlLabInitialStateApiRoute = `glob:*/api/v1/sqllab/`;
 
 afterEach(() => {
-  fetchMock.reset();
+  fetchMock.clearHistory().removeRoutes();
   act(() => {
     store.dispatch(api.util.resetApiState());
   });
@@ -71,11 +72,13 @@ jest.mock('src/SqlLab/components/App', () => () => (
 ));
 
 test('is valid', () => {
-  expect(React.isValidElement(<SqlLab />)).toBe(true);
+  expect(isValidElement(<SqlLab />)).toBe(true);
 });
 
 test('fetches initial data and renders', async () => {
-  expect(fetchMock.calls(sqlLabInitialStateApiRoute).length).toBe(0);
+  expect(fetchMock.callHistory.calls(sqlLabInitialStateApiRoute).length).toBe(
+    0,
+  );
   const storeWithSqlLab = createStore({}, reducers);
   const { getByTestId } = render(<SqlLab />, {
     useRedux: true,
@@ -84,7 +87,9 @@ test('fetches initial data and renders', async () => {
   });
 
   await waitFor(() =>
-    expect(fetchMock.calls(sqlLabInitialStateApiRoute).length).toBe(1),
+    expect(fetchMock.callHistory.calls(sqlLabInitialStateApiRoute).length).toBe(
+      1,
+    ),
   );
 
   expect(getByTestId('mock-sqllab-app')).toBeInTheDocument();

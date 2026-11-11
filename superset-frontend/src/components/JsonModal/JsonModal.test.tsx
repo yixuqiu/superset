@@ -16,9 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { fireEvent, render } from 'spec/helpers/testing-library';
-import JsonModal, { convertBigIntStrToNumber } from '.';
+import { JsonModal } from '.';
+import { convertBigIntStrToNumber } from './utils';
 
 jest.mock('react-json-tree', () => ({
   JSONTree: () => <div data-test="mock-json-tree" />,
@@ -43,6 +43,21 @@ test('renders JSON object in a tree view in a modal', () => {
   expect(getByTestId('mock-json-tree')).toBeInTheDocument();
 });
 
+test('renders an object in a tree view in a modal', () => {
+  const jsonData = { a: 1 };
+  const expected = JSON.stringify(jsonData);
+  const { getByText, getByTestId, queryByTestId } = render(
+    <JsonModal jsonObject={jsonData} jsonValue={jsonData} modalTitle="title" />,
+    {
+      useRedux: true,
+    },
+  );
+  expect(queryByTestId('mock-json-tree')).not.toBeInTheDocument();
+  const link = getByText(expected);
+  fireEvent.click(link);
+  expect(getByTestId('mock-json-tree')).toBeInTheDocument();
+});
+
 test('renders bigInt value in a number format', () => {
   expect(convertBigIntStrToNumber('123')).toBe('123');
   expect(convertBigIntStrToNumber('some string value')).toBe(
@@ -56,5 +71,23 @@ test('renders bigInt value in a number format', () => {
   );
   expect(convertBigIntStrToNumber('"12345678901234567890"')).toBe(
     '12345678901234567890',
+  );
+});
+
+test('keeps quotes on numeric strings json-bigint would not have produced', () => {
+  // json-bigint only stores number literals longer than 15 characters as
+  // strings, so anything shorter was a string in the source JSON
+  expect(convertBigIntStrToNumber('"123"')).toBe('"123"');
+  expect(convertBigIntStrToNumber('"123456789012345"')).toBe(
+    '"123456789012345"',
+  );
+  expect(convertBigIntStrToNumber('"-12345678901234"')).toBe(
+    '"-12345678901234"',
+  );
+  expect(convertBigIntStrToNumber('"1234567890123456"')).toBe(
+    '1234567890123456',
+  );
+  expect(convertBigIntStrToNumber('"-123456789012345"')).toBe(
+    '-123456789012345',
   );
 });

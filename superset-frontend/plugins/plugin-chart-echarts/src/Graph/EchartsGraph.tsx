@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import {
   getColumnLabel,
   getNumberFormatter,
@@ -26,6 +25,7 @@ import { EventHandlers } from '../types';
 import Echart from '../components/Echart';
 import { GraphChartTransformedProps } from './types';
 import { formatSeriesName } from '../utils/series';
+import { useLegendEventHandlers } from '../utils/legendEventHandlers';
 
 type DataRow = {
   source?: string;
@@ -53,6 +53,8 @@ export default function EchartsGraph({
   emitCrossFilters,
   refs,
   coltypeMapping,
+  onLegendStateChanged,
+  onLegendScroll,
 }: GraphChartTransformedProps) {
   const getCrossFilterDataMask = (node: DataRow | undefined) => {
     if (!node?.name || !node?.col) {
@@ -89,7 +91,12 @@ export default function EchartsGraph({
       isCurrentValueSelected: selected.includes(name),
     };
   };
+  const legendEventHandlers = useLegendEventHandlers(
+    onLegendStateChanged,
+    onLegendScroll,
+  );
   const eventHandlers: EventHandlers = {
+    ...legendEventHandlers,
     click: (e: Event) => {
       if (!emitCrossFilters || !setDataMask) {
         return;
@@ -176,6 +183,7 @@ export default function EchartsGraph({
       width={width}
       echartOptions={echartOptions}
       eventHandlers={eventHandlers}
+      vizType={formData.vizType}
     />
   );
 }

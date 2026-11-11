@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { render, screen } from 'spec/helpers/testing-library';
 import CrossLinks, { CrossLinksProps } from './CrossLinks';
 
@@ -69,10 +68,9 @@ test('should render the link with just one item', () => {
     ],
   });
   expect(screen.getByText('Test dashboard')).toBeInTheDocument();
-  expect(screen.getByRole('link')).toHaveAttribute(
-    'href',
-    `/superset/dashboard/1`,
-  );
+  // default `linkPrefix` is now `/dashboard/` (post-route_base);
+  // legacy `/superset/dashboard/...` was the pre-collapse route.
+  expect(screen.getByRole('link')).toHaveAttribute('href', `/dashboard/1`);
 });
 
 test('should render a custom prefix link', () => {

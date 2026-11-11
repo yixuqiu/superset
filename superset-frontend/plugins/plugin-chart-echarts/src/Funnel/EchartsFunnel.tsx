@@ -16,15 +16,28 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { FunnelChartTransformedProps } from './types';
 import Echart from '../components/Echart';
 import { allEventHandlers } from '../utils/eventHandlers';
+import { useLegendEventHandlers } from '../utils/legendEventHandlers';
 
 export default function EchartsFunnel(props: FunnelChartTransformedProps) {
-  const { height, width, echartOptions, selectedValues, refs } = props;
+  const {
+    height,
+    width,
+    echartOptions,
+    selectedValues,
+    refs,
+    formData,
+    onLegendStateChanged,
+    onLegendScroll,
+  } = props;
 
-  const eventHandlers = allEventHandlers(props);
+  const legendEventHandlers = useLegendEventHandlers(
+    onLegendStateChanged,
+    onLegendScroll,
+  );
+  const eventHandlers = { ...legendEventHandlers, ...allEventHandlers(props) };
 
   return (
     <Echart
@@ -34,6 +47,7 @@ export default function EchartsFunnel(props: FunnelChartTransformedProps) {
       echartOptions={echartOptions}
       eventHandlers={eventHandlers}
       selectedValues={selectedValues}
+      vizType={formData.vizType}
     />
   );
 }

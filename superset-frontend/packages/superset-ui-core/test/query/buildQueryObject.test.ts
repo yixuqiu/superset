@@ -25,36 +25,111 @@ import {
   AnnotationType,
   buildQueryObject,
   QueryObject,
+  VizType,
 } from '@superset-ui/core';
+
+test.each(['5__semantic_view', '5__table'])(
+  'preserves dashboard filter provenance without mutating form data (%s)',
+  datasource => {
+    const formData = {
+      datasource,
+      viz_type: VizType.Table,
+      extra_filters: [{ col: 'legacy', op: '==', val: 'US' }],
+      extra_form_data: {
+        filters: [{ col: 'cross_filter', op: 'IN', val: ['US'] }],
+        adhoc_filters: [
+          {
+            expressionType: 'SIMPLE',
+            clause: 'WHERE',
+            subject: 'native',
+            operator: '==',
+            comparator: 'US',
+          },
+        ],
+      },
+      adhoc_filters: [
+        {
+          expressionType: 'SIMPLE',
+          clause: 'WHERE',
+          subject: 'own',
+          operator: '==',
+          comparator: 'Books',
+          isExtra: false,
+        },
+      ],
+    } satisfies Parameters<typeof buildQueryObject>[0];
+    const original = JSON.stringify(formData);
+    const result = buildQueryObject(formData);
+    expect(result.filters).toEqual([
+      { col: 'legacy', op: '==', val: 'US', isExtra: true },
+      { col: 'cross_filter', op: 'IN', val: ['US'], isExtra: true },
+      { col: 'own', op: '==', val: 'Books' },
+      { col: 'native', op: '==', val: 'US', isExtra: true },
+    ]);
+    expect(JSON.stringify(formData)).toBe(original);
+  },
+);
+
+test('preserves the SQL query payload for chart-owned filters with isExtra false', () => {
+  const formData = {
+    datasource: '5__table',
+    viz_type: VizType.Table,
+    adhoc_filters: [
+      {
+        expressionType: 'SIMPLE',
+        clause: 'WHERE',
+        subject: 'country',
+        operator: '==',
+        comparator: 'USA',
+      },
+    ],
+  } satisfies Parameters<typeof buildQueryObject>[0];
+  const original = JSON.stringify(formData);
+  const legacyQuery = buildQueryObject(formData);
+  const savedChartQuery = buildQueryObject({
+    ...formData,
+    adhoc_filters: formData.adhoc_filters.map(filter => ({
+      ...filter,
+      isExtra: false,
+    })),
+  });
+
+  // Filter properties feed the server's result-cache key, including false values.
+  expect(JSON.stringify(savedChartQuery)).toBe(JSON.stringify(legacyQuery));
+  expect(savedChartQuery.filters).toEqual([
+    { col: 'country', op: '==', val: 'USA' },
+  ]);
+  expect(JSON.stringify(formData)).toBe(original);
+});
 
 describe('buildQueryObject', () => {
   let query: QueryObject;
 
-  it('should build granularity for sqlalchemy datasources', () => {
+  test('should build granularity for sqlalchemy datasources', () => {
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
     });
     expect(query.granularity).toEqual('ds');
   });
 
-  it('should build metrics based on default queryFields', () => {
+  test('should build metrics based on default queryFields', () => {
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       metric: 'sum__num',
       secondary_metric: 'avg__num',
     });
     expect(query.metrics).toEqual(['sum__num', 'avg__num']);
   });
 
-  it('should merge original and append filters', () => {
+  test('should merge original and append filters', () => {
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       extra_filters: [{ col: 'abc', op: '==', val: 'qwerty' }],
       adhoc_filters: [
         {
@@ -77,18 +152,18 @@ describe('buildQueryObject', () => {
       },
     });
     expect(query.filters).toEqual([
-      { col: 'abc', op: '==', val: 'qwerty' },
+      { col: 'abc', op: '==', val: 'qwerty', isExtra: true },
       { col: 'foo', op: '!=', val: 'bar' },
     ]);
     expect(query.extras?.where).toEqual('(a = b) AND ((1 = 1))');
   });
 
-  it('should group custom metric control', () => {
+  test('should group custom metric control', () => {
     query = buildQueryObject(
       {
         datasource: '5__table',
         granularity_sqla: 'ds',
-        viz_type: 'table',
+        viz_type: VizType.Table,
         my_custom_metric_control: 'sum__num',
       },
       { my_custom_metric_control: 'metrics' },
@@ -96,12 +171,12 @@ describe('buildQueryObject', () => {
     expect(query.metrics).toEqual(['sum__num']);
   });
 
-  it('should group custom metric control with predefined metrics', () => {
+  test('should group custom metric control with predefined metrics', () => {
     query = buildQueryObject(
       {
         datasource: '5__table',
         granularity_sqla: 'ds',
-        viz_type: 'table',
+        viz_type: VizType.Table,
         metrics: ['sum__num'],
         my_custom_metric_control: 'avg__num',
       },
@@ -110,77 +185,77 @@ describe('buildQueryObject', () => {
     expect(query.metrics).toEqual(['sum__num', 'avg__num']);
   });
 
-  it('should build series_limit from legacy control', () => {
+  test('should build series_limit from legacy control', () => {
     const series_limit = 2;
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       limit: series_limit,
     });
     expect(query.series_limit).toEqual(series_limit);
   });
 
-  it('should build series_limit', () => {
+  test('should build series_limit', () => {
     const series_limit = 2;
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       series_limit,
     });
     expect(query.series_limit).toEqual(series_limit);
   });
 
-  it('should build order_desc', () => {
+  test('should build order_desc', () => {
     const orderDesc = false;
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       order_desc: orderDesc,
     });
     expect(query.order_desc).toEqual(orderDesc);
   });
 
-  it('should build series_limit_metric from legacy control', () => {
+  test('should build series_limit_metric from legacy control', () => {
     const metric = 'country';
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       timeseries_limit_metric: metric,
     });
     expect(query.series_limit_metric).toEqual(metric);
   });
 
-  it('should build series_limit_metric', () => {
+  test('should build series_limit_metric', () => {
     const metric = 'country';
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'pivot_table_v2',
+      viz_type: VizType.PivotTable,
       series_limit_metric: metric,
     });
     expect(query.series_limit_metric).toEqual(metric);
   });
 
-  it('should build series_limit_metric as undefined when empty array', () => {
+  test('should build series_limit_metric as undefined when empty array', () => {
     const metric: any = [];
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'pivot_table_v2',
+      viz_type: VizType.PivotTable,
       series_limit_metric: metric,
     });
     expect(query.series_limit_metric).toEqual(undefined);
   });
 
-  it('should handle null and non-numeric row_limit and row_offset', () => {
+  test('should handle null and non-numeric row_limit and row_offset', () => {
     const baseQuery = {
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       row_limit: null,
     };
 
@@ -221,7 +296,7 @@ describe('buildQueryObject', () => {
     expect(query.row_offset).toBeUndefined();
   });
 
-  it('should populate annotation_layers', () => {
+  test('should populate annotation_layers', () => {
     const annotationLayers: AnnotationLayer[] = [
       {
         annotationType: AnnotationType.Formula,
@@ -267,18 +342,18 @@ describe('buildQueryObject', () => {
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       annotation_layers: annotationLayers,
     });
     expect(query.annotation_layers).toEqual(annotationLayers);
   });
 
-  it('should populate url_params', () => {
+  test('should populate url_params', () => {
     expect(
       buildQueryObject({
         datasource: '5__table',
         granularity_sqla: 'ds',
-        viz_type: 'table',
+        viz_type: VizType.Table,
         url_params: { abc: '123' },
       }).url_params,
     ).toEqual({ abc: '123' });
@@ -286,41 +361,41 @@ describe('buildQueryObject', () => {
       buildQueryObject({
         datasource: '5__table',
         granularity_sqla: 'ds',
-        viz_type: 'table',
+        viz_type: VizType.Table,
         // @ts-expect-error
         url_params: null,
       }).url_params,
     ).toBeUndefined();
   });
 
-  it('should populate granularity', () => {
+  test('should populate granularity', () => {
     const granularity = 'ds';
     query = buildQueryObject({
       datasource: '5__table',
       granularity,
-      viz_type: 'table',
+      viz_type: VizType.Table,
     });
     expect(query.granularity).toEqual(granularity);
   });
 
-  it('should populate granularity from legacy field', () => {
+  test('should populate granularity from legacy field', () => {
     const granularity = 'ds';
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: granularity,
-      viz_type: 'table',
+      viz_type: VizType.Table,
     });
     expect(query.granularity).toEqual(granularity);
   });
 
-  it('should populate custom_params', () => {
+  test('should populate custom_params', () => {
     const customParams: JsonObject = {
       customObject: { id: 137, name: 'C-137' },
     };
     query = buildQueryObject({
       datasource: '5__table',
       granularity_sqla: 'ds',
-      viz_type: 'table',
+      viz_type: VizType.Table,
       custom_params: customParams,
     });
     expect(query.custom_params).toEqual(customParams);

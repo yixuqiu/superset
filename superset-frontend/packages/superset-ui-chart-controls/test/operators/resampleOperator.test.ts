@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { QueryObject, SqlaFormData } from '@superset-ui/core';
+import { QueryObject, SqlaFormData, VizType } from '@superset-ui/core';
 import { resampleOperator } from '@superset-ui/chart-controls';
 
 const formData: SqlaFormData = {
@@ -27,7 +27,7 @@ const formData: SqlaFormData = {
   time_range: '2015 : 2016',
   granularity: 'month',
   datasource: 'foo',
-  viz_type: 'table',
+  viz_type: VizType.Table,
 };
 const queryObject: QueryObject = {
   metrics: [
@@ -103,6 +103,49 @@ test('should do zerofill resample', () => {
   expect(
     resampleOperator(
       { ...formData, resample_method: 'zerofill', resample_rule: '1D' },
+      queryObject,
+    ),
+  ).toEqual({
+    operation: 'resample',
+    options: {
+      method: 'asfreq',
+      rule: '1D',
+      fill_value: 0,
+    },
+  });
+});
+
+test('should request filling the entire time range', () => {
+  expect(
+    resampleOperator(
+      {
+        ...formData,
+        resample_method: 'zerofill',
+        resample_rule: '1D',
+        resample_fill_time_range: true,
+      },
+      queryObject,
+    ),
+  ).toEqual({
+    operation: 'resample',
+    options: {
+      method: 'asfreq',
+      rule: '1D',
+      fill_value: 0,
+      fill_time_range: true,
+    },
+  });
+});
+
+test('should omit fill_time_range when the control is off', () => {
+  expect(
+    resampleOperator(
+      {
+        ...formData,
+        resample_method: 'zerofill',
+        resample_rule: '1D',
+        resample_fill_time_range: false,
+      },
       queryObject,
     ),
   ).toEqual({

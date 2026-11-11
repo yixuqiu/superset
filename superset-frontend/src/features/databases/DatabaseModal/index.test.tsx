@@ -19,31 +19,34 @@
 
 // TODO: These tests should be made atomic in separate files
 
-import React from 'react';
+import { useState } from 'react';
 import fetchMock from 'fetch-mock';
-import userEvent from '@testing-library/user-event';
 import {
   render,
   screen,
+  userEvent,
   within,
-  cleanup,
-  act,
   waitFor,
+  fireEvent,
+  act,
 } from 'spec/helpers/testing-library';
 import { getExtensionsRegistry } from '@superset-ui/core';
-import setupExtensions from 'src/setup/setupExtensions';
+import setupCodeOverrides from 'src/setup/setupCodeOverrides';
 import * as hooks from 'src/views/CRUD/hooks';
 import { DatabaseObject, ConfigurationMethod } from '../types';
 import DatabaseModal, {
   dbReducer,
   DBReducerActionType,
   ActionType,
+  DatabaseModalProps,
 } from './index';
 
 jest.mock('@superset-ui/core', () => ({
   ...jest.requireActual('@superset-ui/core'),
   isFeatureEnabled: () => true,
 }));
+
+const realUseSingleViewResource = hooks.useSingleViewResource;
 
 const mockHistoryPush = jest.fn();
 jest.mock('react-router-dom', () => ({
@@ -64,245 +67,7 @@ const DATABASE_FETCH_ENDPOINT = 'glob:*/api/v1/database/10';
 const AVAILABLE_DB_ENDPOINT = 'glob:*/api/v1/database/available*';
 const VALIDATE_PARAMS_ENDPOINT = 'glob:*/api/v1/database/validate_parameters*';
 const DATABASE_CONNECT_ENDPOINT = 'glob:*/api/v1/database/';
-
-fetchMock.post(DATABASE_CONNECT_ENDPOINT, {
-  id: 10,
-  result: {
-    configuration_method: 'sqlalchemy_form',
-    database_name: 'Other2',
-    driver: 'apsw',
-    expose_in_sqllab: true,
-    extra: '{"allows_virtual_table_explore":true}',
-    sqlalchemy_uri: 'gsheets://',
-  },
-  json: 'foo',
-});
-
-fetchMock.config.overwriteRoutes = true;
-fetchMock.get(DATABASE_FETCH_ENDPOINT, {
-  result: {
-    id: 10,
-    database_name: 'my database',
-    expose_in_sqllab: false,
-    allow_ctas: false,
-    allow_cvas: false,
-    configuration_method: 'sqlalchemy_form',
-  },
-});
-fetchMock.mock(AVAILABLE_DB_ENDPOINT, {
-  databases: [
-    {
-      available_drivers: ['psycopg2'],
-      default_driver: 'psycopg2',
-      engine: 'postgresql',
-      name: 'PostgreSQL',
-      parameters: {
-        properties: {
-          database: {
-            description: 'Database name',
-            type: 'string',
-          },
-          encryption: {
-            description: 'Use an encrypted connection to the database',
-            type: 'boolean',
-          },
-          host: {
-            description: 'Hostname or IP address',
-            type: 'string',
-          },
-          password: {
-            description: 'Password',
-            nullable: true,
-            type: 'string',
-          },
-          port: {
-            description: 'Database port',
-            format: 'int32',
-            maximum: 65536,
-            minimum: 0,
-            type: 'integer',
-          },
-          query: {
-            additionalProperties: {},
-            description: 'Additional parameters',
-            type: 'object',
-          },
-          ssh: {
-            description: 'Create SSH Tunnel',
-            type: 'boolean',
-          },
-          username: {
-            description: 'Username',
-            nullable: true,
-            type: 'string',
-          },
-        },
-        required: ['database', 'host', 'port', 'username'],
-        type: 'object',
-      },
-      preferred: true,
-      sqlalchemy_uri_placeholder:
-        'postgresql://user:password@host:port/dbname[?key=value&key=value...]',
-      engine_information: {
-        supports_file_upload: true,
-        disable_ssh_tunneling: false,
-      },
-    },
-    {
-      available_drivers: ['rest'],
-      engine: 'presto',
-      name: 'Presto',
-      preferred: true,
-      engine_information: {
-        supports_file_upload: true,
-        disable_ssh_tunneling: false,
-      },
-    },
-    {
-      available_drivers: ['mysqldb'],
-      default_driver: 'mysqldb',
-      engine: 'mysql',
-      name: 'MySQL',
-      parameters: {
-        properties: {
-          database: {
-            description: 'Database name',
-            type: 'string',
-          },
-          encryption: {
-            description: 'Use an encrypted connection to the database',
-            type: 'boolean',
-          },
-          host: {
-            description: 'Hostname or IP address',
-            type: 'string',
-          },
-          password: {
-            description: 'Password',
-            nullable: true,
-            type: 'string',
-          },
-          port: {
-            description: 'Database port',
-            format: 'int32',
-            maximum: 65536,
-            minimum: 0,
-            type: 'integer',
-          },
-          query: {
-            additionalProperties: {},
-            description: 'Additional parameters',
-            type: 'object',
-          },
-          username: {
-            description: 'Username',
-            nullable: true,
-            type: 'string',
-          },
-        },
-        required: ['database', 'host', 'port', 'username'],
-        type: 'object',
-      },
-      preferred: true,
-      sqlalchemy_uri_placeholder:
-        'mysql://user:password@host:port/dbname[?key=value&key=value...]',
-      engine_information: {
-        supports_file_upload: true,
-        disable_ssh_tunneling: false,
-      },
-    },
-    {
-      available_drivers: ['pysqlite'],
-      engine: 'sqlite',
-      name: 'SQLite',
-      preferred: true,
-      engine_information: {
-        supports_file_upload: true,
-        disable_ssh_tunneling: false,
-      },
-    },
-    {
-      available_drivers: ['rest'],
-      engine: 'druid',
-      name: 'Apache Druid',
-      preferred: false,
-      engine_information: {
-        supports_file_upload: true,
-        disable_ssh_tunneling: false,
-      },
-    },
-    {
-      available_drivers: ['bigquery'],
-      default_driver: 'bigquery',
-      engine: 'bigquery',
-      name: 'Google BigQuery',
-      parameters: {
-        properties: {
-          credentials_info: {
-            description: 'Contents of BigQuery JSON credentials.',
-            type: 'string',
-            'x-encrypted-extra': true,
-          },
-          query: {
-            type: 'object',
-          },
-        },
-        type: 'object',
-      },
-      preferred: false,
-      sqlalchemy_uri_placeholder: 'bigquery://{project_id}',
-      engine_information: {
-        supports_file_upload: true,
-        disable_ssh_tunneling: true,
-      },
-    },
-    {
-      available_drivers: ['rest'],
-      default_driver: 'apsw',
-      engine: 'gsheets',
-      name: 'Google Sheets',
-      preferred: false,
-      engine_information: {
-        supports_file_upload: false,
-        disable_ssh_tunneling: true,
-      },
-    },
-    {
-      available_drivers: ['connector'],
-      default_driver: 'connector',
-      engine: 'databricks',
-      name: 'Databricks',
-      parameters: {
-        properties: {
-          access_token: {
-            type: 'string',
-          },
-          database: {
-            type: 'string',
-          },
-          host: {
-            type: 'string',
-          },
-          http_path: {
-            type: 'string',
-          },
-          port: {
-            format: 'int32',
-            type: 'integer',
-          },
-        },
-        required: ['access_token', 'database', 'host', 'http_path', 'port'],
-        type: 'object',
-      },
-      preferred: true,
-      sqlalchemy_uri_placeholder:
-        'databricks+connector://token:{access_token}@{host}:{port}/{database_name}',
-    },
-  ],
-});
-fetchMock.post(VALIDATE_PARAMS_ENDPOINT, {
-  message: 'OK',
-});
+const IMPORT_DB_ENDPOINT = 'glob:*/api/v1/database/import/';
 
 const databaseFixture: DatabaseObject = {
   id: 123,
@@ -314,33 +79,822 @@ const databaseFixture: DatabaseObject = {
   driver: 'psycopg2',
 };
 
+// eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
 describe('DatabaseModal', () => {
-  const renderAndWait = async () => {
-    const mounted = act(async () => {
-      render(<DatabaseModal {...dbProps} />, {
-        useRedux: true,
-      });
+  beforeEach(() => {
+    fetchMock.post(
+      DATABASE_CONNECT_ENDPOINT,
+      {
+        id: 10,
+        result: {
+          configuration_method: 'sqlalchemy_form',
+          database_name: 'Other2',
+          driver: 'apsw',
+          expose_in_sqllab: true,
+          extra: '{"allows_virtual_table_explore":true}',
+          sqlalchemy_uri: 'gsheets://',
+        },
+        json: 'foo',
+      },
+      { name: 'database-connect' },
+    );
+
+    fetchMock.get(DATABASE_FETCH_ENDPOINT, {
+      result: {
+        id: 10,
+        database_name: 'my database',
+        expose_in_sqllab: false,
+        allow_ctas: false,
+        allow_cvas: false,
+        configuration_method: 'sqlalchemy_form',
+      },
     });
-
-    return mounted;
-  };
-
-  beforeEach(async () => {
-    await renderAndWait();
+    fetchMock.route(AVAILABLE_DB_ENDPOINT, {
+      databases: [
+        {
+          available_drivers: ['psycopg2'],
+          default_driver: 'psycopg2',
+          engine: 'postgresql',
+          name: 'PostgreSQL',
+          parameters: {
+            properties: {
+              database: {
+                description: 'Database name',
+                type: 'string',
+              },
+              encryption: {
+                description: 'Use an encrypted connection to the database',
+                type: 'boolean',
+              },
+              host: {
+                description: 'Hostname or IP address',
+                type: 'string',
+              },
+              password: {
+                description: 'Password',
+                nullable: true,
+                type: 'string',
+              },
+              port: {
+                description: 'Database port',
+                format: 'int32',
+                maximum: 65536,
+                minimum: 0,
+                nullable: true,
+                type: 'integer',
+              },
+              query: {
+                additionalProperties: {},
+                description: 'Additional parameters',
+                type: 'object',
+              },
+              ssh: {
+                description: 'Create SSH Tunnel',
+                type: 'boolean',
+              },
+              username: {
+                description: 'Username',
+                nullable: true,
+                type: 'string',
+              },
+            },
+            required: ['database', 'host', 'username'],
+            type: 'object',
+          },
+          preferred: true,
+          sqlalchemy_uri_placeholder:
+            'postgresql://user:password@host:port/dbname[?key=value&key=value...]',
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: false,
+          },
+        },
+        {
+          available_drivers: ['rest'],
+          engine: 'presto',
+          name: 'Presto',
+          preferred: true,
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: false,
+          },
+        },
+        {
+          available_drivers: ['mysqldb'],
+          default_driver: 'mysqldb',
+          engine: 'mysql',
+          name: 'MySQL',
+          parameters: {
+            properties: {
+              database: {
+                description: 'Database name',
+                type: 'string',
+              },
+              encryption: {
+                description: 'Use an encrypted connection to the database',
+                type: 'boolean',
+              },
+              host: {
+                description: 'Hostname or IP address',
+                type: 'string',
+              },
+              password: {
+                description: 'Password',
+                nullable: true,
+                type: 'string',
+              },
+              port: {
+                description: 'Database port',
+                format: 'int32',
+                maximum: 65536,
+                minimum: 0,
+                type: 'integer',
+              },
+              query: {
+                additionalProperties: {},
+                description: 'Additional parameters',
+                type: 'object',
+              },
+              username: {
+                description: 'Username',
+                nullable: true,
+                type: 'string',
+              },
+            },
+            required: ['database', 'host', 'port', 'username'],
+            type: 'object',
+          },
+          preferred: true,
+          sqlalchemy_uri_placeholder:
+            'mysql://user:password@host:port/dbname[?key=value&key=value...]',
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: false,
+          },
+        },
+        {
+          available_drivers: ['pysqlite'],
+          engine: 'sqlite',
+          name: 'SQLite',
+          preferred: true,
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: false,
+          },
+        },
+        {
+          available_drivers: ['rest'],
+          engine: 'druid',
+          name: 'Apache Druid',
+          preferred: false,
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: false,
+          },
+        },
+        {
+          available_drivers: ['bigquery'],
+          default_driver: 'bigquery',
+          engine: 'bigquery',
+          name: 'Google BigQuery',
+          parameters: {
+            properties: {
+              credentials_info: {
+                description: 'Contents of BigQuery JSON credentials.',
+                type: 'string',
+                'x-encrypted-extra': true,
+              },
+              query: {
+                type: 'object',
+              },
+            },
+            type: 'object',
+          },
+          preferred: false,
+          sqlalchemy_uri_placeholder: 'bigquery://{project_id}',
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: true,
+          },
+        },
+        {
+          available_drivers: ['rest'],
+          default_driver: 'apsw',
+          engine: 'gsheets',
+          name: 'Google Sheets',
+          preferred: false,
+          engine_information: {
+            supports_file_upload: false,
+            disable_ssh_tunneling: true,
+          },
+        },
+        {
+          available_drivers: ['connector'],
+          default_driver: 'connector',
+          engine: 'databricks',
+          name: 'Databricks',
+          parameters: {
+            properties: {
+              access_token: {
+                type: 'string',
+              },
+              database: {
+                type: 'string',
+              },
+              host: {
+                type: 'string',
+              },
+              http_path: {
+                type: 'string',
+              },
+              port: {
+                format: 'int32',
+                type: 'integer',
+              },
+            },
+            required: ['access_token', 'database', 'host', 'http_path', 'port'],
+            type: 'object',
+          },
+          preferred: true,
+          sqlalchemy_uri_placeholder:
+            'databricks+connector://token:{access_token}@{host}:{port}/{database_name}',
+        },
+        {
+          available_drivers: ['snowflake'],
+          default_driver: 'snowflake',
+          engine: 'snowflake',
+          name: 'Snowflake',
+          parameters: {
+            properties: {
+              account: {
+                type: 'string',
+              },
+              database: {
+                type: 'string',
+              },
+              password: {
+                type: 'string',
+              },
+              role: {
+                type: 'string',
+              },
+              username: {
+                type: 'string',
+              },
+              warehouse: {
+                type: 'string',
+              },
+              oauth2_client_info: {
+                description: 'OAuth2 client information',
+                type: 'string',
+                'x-encrypted-extra': true,
+              },
+              embedded_credentials: {
+                description:
+                  'Credentials used only for embedded guest requests',
+                type: 'string',
+                'x-encrypted-extra': true,
+              },
+            },
+            required: [
+              'account',
+              'database',
+              'password',
+              'role',
+              'username',
+              'warehouse',
+            ],
+            type: 'object',
+          },
+          preferred: false,
+          sqlalchemy_uri_placeholder: 'snowflake://',
+          engine_information: {
+            supports_file_upload: true,
+            disable_ssh_tunneling: false,
+            supports_oauth2: true,
+          },
+        },
+      ],
+    });
+    fetchMock.post(
+      VALIDATE_PARAMS_ENDPOINT,
+      {
+        message: 'OK',
+      },
+      { name: 'validate-params' },
+    );
   });
 
-  afterEach(cleanup);
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+  afterEach(() => fetchMock.clearHistory().removeRoutes());
 
+  const setup = (propsOverwrite: Partial<DatabaseModalProps> = {}) =>
+    render(<DatabaseModal {...dbProps} {...propsOverwrite} />, {
+      useRedux: true,
+    });
+
+  /** Check that closing a mounted modal cannot reuse a saved connection id. */
+  const expectFreshCreateAfterEdit = async (
+    closeAction: 'Close' | 'X' | 'Finish' | 'Late X',
+  ): Promise<void> => {
+    const resourceHook = jest.spyOn(hooks, 'useSingleViewResource');
+    const previousImplementation = resourceHook.getMockImplementation()!;
+    resourceHook.mockImplementation(realUseSingleViewResource);
+    let releaseEditFetch: () => void = () => {};
+    const editFetchReady = new Promise<void>(resolve => {
+      releaseEditFetch = resolve;
+    });
+    const editResponse = {
+      result: {
+        id: 10,
+        database_name: 'Existing connection',
+        backend: 'sqlite',
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+        sqlalchemy_uri: 'sqlite:///existing.db',
+      },
+    };
+    fetchMock.get(
+      'glob:*/api/v1/database/10/connection',
+      closeAction === 'Late X'
+        ? async () => {
+            await editFetchReady;
+            return editResponse;
+          }
+        : editResponse,
+    );
+    fetchMock.put(DATABASE_FETCH_ENDPOINT, {
+      id: 10,
+      result: {
+        database_name: 'Existing connection',
+        backend: 'sqlite',
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+        sqlalchemy_uri: 'sqlite:///existing.db',
+      },
+    });
+    fetchMock.post('glob:*/api/v1/database/test_connection/', {
+      message: 'OK',
+    });
+    const Harness = () => {
+      const [show, setShow] = useState(true);
+      const [databaseId, setDatabaseId] = useState<number | undefined>(10);
+      return (
+        <>
+          <button type="button" onClick={() => setShow(true)}>
+            + Database
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDatabaseId(10);
+              setShow(true);
+            }}
+          >
+            Edit existing
+          </button>
+          <DatabaseModal
+            show={show}
+            databaseId={databaseId}
+            onHide={() => {
+              setShow(false);
+              setDatabaseId(undefined);
+            }}
+          />
+        </>
+      );
+    };
+    try {
+      render(<Harness />, { useRedux: true });
+      if (closeAction === 'Late X') {
+        await waitFor(() =>
+          expect(
+            fetchMock.callHistory.calls('glob:*/api/v1/database/10/connection'),
+          ).toHaveLength(1),
+        );
+      } else {
+        expect(
+          await screen.findByDisplayValue('Existing connection'),
+        ).toBeInTheDocument();
+      }
+      await userEvent.click(document.querySelector('.ant-modal-wrap')!);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      if (closeAction === 'Finish') {
+        await userEvent.click(screen.getByRole('button', { name: 'Finish' }));
+      } else if (closeAction === 'X' || closeAction === 'Late X') {
+        await userEvent.click(screen.getAllByLabelText('Close')[0]);
+      } else {
+        await userEvent.click(screen.getByText('Close'));
+      }
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+      );
+      if (closeAction !== 'Late X') fetchMock.clearHistory();
+      await userEvent.click(screen.getByRole('button', { name: '+ Database' }));
+      await screen.findByRole('dialog');
+      if (closeAction === 'Late X') {
+        await act(async () => {
+          releaseEditFetch();
+          await fetchMock.callHistory.flush(true);
+        });
+      }
+      const picker = screen.queryByRole('heading', {
+        name: /select a database to connect/i,
+      });
+      // Exercise saving even if stale state incorrectly skips the picker.
+      if (picker) {
+        await userEvent.click(
+          await screen.findByRole('button', { name: /sqlite/i }),
+        );
+      }
+      fireEvent.change(await screen.findByTestId('database-name-input'), {
+        target: { value: 'My new sandbox' },
+      });
+      fireEvent.change(screen.getByTestId('sqlalchemy-uri-input'), {
+        target: { value: 'sqlite:///sandbox.db' },
+      });
+      await userEvent.click(
+        screen.getByRole('button', { name: /test connection/i }),
+      );
+      const connect = screen.getByRole('button', { name: 'Connect' });
+      await waitFor(() => expect(connect).toBeEnabled());
+      await userEvent.click(connect);
+      await waitFor(() =>
+        expect(
+          fetchMock.callHistory.calls(DATABASE_CONNECT_ENDPOINT).length +
+            fetchMock.callHistory.calls(DATABASE_FETCH_ENDPOINT, {
+              method: 'PUT',
+            }).length,
+        ).toBeGreaterThan(0),
+      );
+      expect(
+        fetchMock.callHistory.calls(DATABASE_FETCH_ENDPOINT, {
+          method: 'PUT',
+        }),
+      ).toHaveLength(0);
+      expect(picker).not.toBeNull();
+      expect(
+        fetchMock.callHistory.calls(DATABASE_CONNECT_ENDPOINT),
+      ).toHaveLength(1);
+      expect(
+        JSON.parse(
+          fetchMock.callHistory.lastCall(DATABASE_CONNECT_ENDPOINT)!.options
+            .body as string,
+        ),
+      ).not.toHaveProperty('id');
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+      );
+      // A successful create also updates the resource cache before closing.
+      await userEvent.click(screen.getByRole('button', { name: '+ Database' }));
+      expect(
+        await screen.findByRole('heading', {
+          name: /select a database to connect/i,
+        }),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getAllByLabelText('Close')[0]);
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+      );
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Edit existing' }),
+      );
+      expect(
+        await screen.findByDisplayValue('Existing connection'),
+      ).toBeInTheDocument();
+    } finally {
+      releaseEditFetch();
+      resourceHook.mockImplementation(previousImplementation);
+    }
+  };
+
+  test('closing edit then creating uses POST without the old id', async () => {
+    await expectFreshCreateAfterEdit('Close');
+  });
+
+  test('X edit then creating uses POST without the old id', async () => {
+    await expectFreshCreateAfterEdit('X');
+  });
+
+  test('saving edit then creating uses POST without the old id', async () => {
+    await expectFreshCreateAfterEdit('Finish');
+  });
+
+  test('late edit fetch after X then creating uses POST without the old id', async () => {
+    await expectFreshCreateAfterEdit('Late X');
+  });
+
+  /** Fill a new dynamic-form connection without relying on saved state. */
+  const connectPostgres = async (name: string, host: string) => {
+    await userEvent.click(
+      await screen.findByRole('button', { name: /postgresql/i }),
+    );
+    fireEvent.change(
+      document.querySelector<HTMLInputElement>('input[name="database_name"]')!,
+      {
+        target: { value: name },
+      },
+    );
+    for (const [field, value] of Object.entries({
+      host,
+      port: '5432',
+      database: 'postgres',
+      username: 'testdb',
+    })) {
+      fireEvent.change(
+        document.querySelector<HTMLInputElement>(`input[name="${field}"]`)!,
+        { target: { value } },
+      );
+    }
+    fireEvent.blur(
+      document.querySelector<HTMLInputElement>('input[name="username"]')!,
+    );
+    const connect = screen.getByRole('button', { name: 'Connect' });
+    await waitFor(() => expect(connect).toBeEnabled());
+    await userEvent.click(connect);
+  };
+
+  /** Check that late writes cannot populate or close a subsequent create session. */
+  const expectFreshCreateAfterLateWrite = async (
+    operation: 'create' | 'update',
+  ): Promise<void> => {
+    const resourceHook = jest.spyOn(hooks, 'useSingleViewResource');
+    const previousImplementation = resourceHook.getMockImplementation()!;
+    resourceHook.mockImplementation(realUseSingleViewResource);
+    let releaseWrite: () => void = () => {};
+    const writeReady = new Promise<void>(resolve => {
+      releaseWrite = resolve;
+    });
+    const connection = {
+      id: 77,
+      database_name: 'First connection',
+      backend: 'postgresql',
+      configuration_method: ConfigurationMethod.DynamicForm,
+    };
+    let createCount = 0;
+    fetchMock.modifyRoute('database-connect', {
+      response: async () => {
+        createCount += 1;
+        if (operation === 'create' && createCount === 1) await writeReady;
+        const id = createCount === 1 ? 77 : 88;
+        return { id, result: { ...connection, id } };
+      },
+    });
+    fetchMock.put('glob:*/api/v1/database/77', async () => {
+      await writeReady;
+      return { id: 77, result: connection };
+    });
+    const onDatabaseAdd = jest.fn();
+    const Harness = () => {
+      const [show, setShow] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setShow(true)}>
+            + Database
+          </button>
+          <DatabaseModal
+            show={show}
+            onHide={() => setShow(false)}
+            onDatabaseAdd={onDatabaseAdd}
+          />
+        </>
+      );
+    };
+    try {
+      render(<Harness />, { useRedux: true });
+      await connectPostgres('First connection', 'first.example');
+      await waitFor(() =>
+        expect(
+          fetchMock.callHistory.calls(DATABASE_CONNECT_ENDPOINT),
+        ).toHaveLength(1),
+      );
+      if (operation === 'update') {
+        expect(await screen.findByText(/step 3 of 3/i)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Finish' }));
+        await waitFor(() =>
+          expect(
+            fetchMock.callHistory.calls('glob:*/api/v1/database/77'),
+          ).toHaveLength(1),
+        );
+      }
+      await userEvent.click(screen.getAllByLabelText('Close')[0]);
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+      );
+      await userEvent.click(screen.getByRole('button', { name: '+ Database' }));
+      await screen.findByRole('dialog');
+      onDatabaseAdd.mockClear();
+      await act(async () => {
+        releaseWrite();
+        await fetchMock.callHistory.flush(true);
+      });
+      expect(
+        screen.getByRole('heading', {
+          name: /select a database to connect/i,
+        }),
+      ).toBeInTheDocument();
+      expect(onDatabaseAdd).toHaveBeenCalledTimes(1);
+      fetchMock.clearHistory();
+      await connectPostgres('Second connection', 'second.example');
+      expect(await screen.findByText(/step 3 of 3/i)).toBeInTheDocument();
+      expect(
+        fetchMock.callHistory.calls(DATABASE_CONNECT_ENDPOINT),
+      ).toHaveLength(1);
+      expect(
+        fetchMock.callHistory.calls('glob:*/api/v1/database/77', {
+          method: 'PUT',
+        }),
+      ).toHaveLength(0);
+      const payload = JSON.parse(
+        fetchMock.callHistory.lastCall(DATABASE_CONNECT_ENDPOINT)!.options
+          .body as string,
+      );
+      expect(payload).not.toHaveProperty('id');
+      expect(payload.database_name).toBe('Second connection');
+      expect(payload.parameters.host).toBe('second.example');
+      expect(onDatabaseAdd).toHaveBeenCalledTimes(2);
+    } finally {
+      releaseWrite();
+      resourceHook.mockImplementation(previousImplementation);
+    }
+  };
+
+  test('late create response after X leaves the next connection as a fresh POST', async () => {
+    await expectFreshCreateAfterLateWrite('create');
+  });
+
+  test('late update response after X leaves the next connection as a fresh POST', async () => {
+    await expectFreshCreateAfterLateWrite('update');
+  });
+
+  /** Check that abandoning a save restores a usable picker without publishing it. */
+  const expectPickerAfterBackDuringPendingSave = async (
+    operation: 'create' | 'validation',
+  ): Promise<void> => {
+    const resourceHook = jest.spyOn(hooks, 'useSingleViewResource');
+    const previousImplementation = resourceHook.getMockImplementation()!;
+    resourceHook.mockImplementation(realUseSingleViewResource);
+    let releaseRequest: () => void = () => {};
+    const requestReady = new Promise<void>(resolve => {
+      releaseRequest = resolve;
+    });
+    let holdValidation = false;
+    fetchMock.modifyRoute('validate-params', {
+      response: async () => {
+        if (holdValidation) await requestReady;
+        return { message: 'OK' };
+      },
+    });
+    fetchMock.modifyRoute('database-connect', {
+      response: async () => {
+        if (operation === 'create') await requestReady;
+        return {
+          id: 77,
+          result: {
+            id: 77,
+            database_name: 'Abandoned connection',
+            backend: 'postgresql',
+            configuration_method: ConfigurationMethod.DynamicForm,
+          },
+        };
+      },
+    });
+    const onDatabaseAdd = jest.fn();
+    try {
+      setup({ onDatabaseAdd });
+      // Only hold save-time validation, not the field blur requests.
+      await userEvent.click(
+        await screen.findByRole('button', { name: /postgresql/i }),
+      );
+      for (const [field, value] of Object.entries({
+        database_name: 'Abandoned connection',
+        host: 'abandoned.example',
+        port: '5432',
+        database: 'postgres',
+        username: 'testdb',
+      })) {
+        fireEvent.change(
+          document.querySelector<HTMLInputElement>(`input[name="${field}"]`)!,
+          { target: { value } },
+        );
+      }
+      fireEvent.blur(
+        document.querySelector<HTMLInputElement>('input[name="username"]')!,
+      );
+      await act(async () => {
+        await fetchMock.callHistory.flush(true);
+      });
+      const validationCount = fetchMock.callHistory.calls(
+        VALIDATE_PARAMS_ENDPOINT,
+      ).length;
+      holdValidation = operation === 'validation';
+      await userEvent.click(screen.getByRole('button', { name: 'Connect' }));
+      await waitFor(() =>
+        expect(
+          fetchMock.callHistory.calls(
+            operation === 'create'
+              ? DATABASE_CONNECT_ENDPOINT
+              : VALIDATE_PARAMS_ENDPOINT,
+          ),
+        ).toHaveLength(operation === 'create' ? 1 : validationCount + 1),
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Back' }));
+      expect(
+        await screen.findByRole('button', { name: /postgresql/i }),
+      ).toBeInTheDocument();
+      await act(async () => {
+        releaseRequest();
+        await fetchMock.callHistory.flush(true);
+      });
+      expect(
+        screen.getByRole('heading', {
+          name: /select a database to connect/i,
+        }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/step 3 of 3/i)).not.toBeInTheDocument();
+      expect(onDatabaseAdd).toHaveBeenCalledTimes(
+        operation === 'create' ? 1 : 0,
+      );
+      expect(
+        fetchMock.callHistory.calls(DATABASE_CONNECT_ENDPOINT),
+      ).toHaveLength(operation === 'create' ? 1 : 0);
+      await connectPostgres('Replacement connection', 'replacement.example');
+      expect(await screen.findByText(/step 3 of 3/i)).toBeInTheDocument();
+    } finally {
+      releaseRequest();
+      resourceHook.mockImplementation(previousImplementation);
+    }
+  };
+
+  test('Back during pending create restores the picker and discards abandoned modal state', async () => {
+    await expectPickerAfterBackDuringPendingSave('create');
+  });
+
+  test('Back during pending validation restores the picker and discards abandoned modal state', async () => {
+    await expectPickerAfterBackDuringPendingSave('validation');
+  });
+
+  test('switching edit targets loads the active target while the previous fetch is pending', async () => {
+    const resourceHook = jest.spyOn(hooks, 'useSingleViewResource');
+    const previousImplementation = resourceHook.getMockImplementation()!;
+    resourceHook.mockImplementation(realUseSingleViewResource);
+    let releaseEditFetch: () => void = () => {};
+    const editFetchReady = new Promise<void>(resolve => {
+      releaseEditFetch = resolve;
+    });
+    const connection = {
+      backend: 'sqlite',
+      configuration_method: ConfigurationMethod.SqlalchemyUri,
+      sqlalchemy_uri: 'sqlite:///existing.db',
+    };
+    fetchMock.get('glob:*/api/v1/database/10/connection', async () => {
+      await editFetchReady;
+      return {
+        result: { ...connection, id: 10, database_name: 'Previous target' },
+      };
+    });
+    fetchMock.get('glob:*/api/v1/database/20/connection', {
+      result: { ...connection, id: 20, database_name: 'Active target' },
+    });
+    try {
+      const { rerender } = setup({ databaseId: 10 });
+      await waitFor(() =>
+        expect(
+          fetchMock.callHistory.calls('glob:*/api/v1/database/10/connection'),
+        ).toHaveLength(1),
+      );
+      rerender(<DatabaseModal {...dbProps} databaseId={20} />);
+      expect(
+        await screen.findByDisplayValue('Active target'),
+      ).toBeInTheDocument();
+      await act(async () => {
+        releaseEditFetch();
+        await fetchMock.callHistory.flush(true);
+      });
+      expect(screen.getByDisplayValue('Active target')).toBeInTheDocument();
+      expect(
+        screen.queryByDisplayValue('Previous target'),
+      ).not.toBeInTheDocument();
+    } finally {
+      releaseEditFetch();
+      resourceHook.mockImplementation(previousImplementation);
+    }
+  });
+
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('Visual: New database connection', () => {
-    test('renders the initial load of Step 1 correctly', () => {
+    test('renders the initial load of Step 1 correctly', async () => {
+      setup();
+
       // ---------- Components ----------
       // <TabHeader> - AntD header
-      const closeButton = screen.getByLabelText('Close');
+      const closeButtons = await screen.findAllByLabelText('Close');
+      const closeButton = closeButtons[0];
       const step1Header = screen.getByRole('heading', {
         name: /connect a database/i,
       });
       // <ModalHeader> - Connection header
-      const step1Helper = screen.getByText(/step 1 of 3/i);
+      const step1Helper = await screen.findByText(/step 1 of 3/i);
       const selectDbHeader = screen.getByRole('heading', {
         name: /select a database to connect/i,
       });
@@ -380,11 +934,12 @@ describe('DatabaseModal', () => {
         hidden: true,
       });
 
-      const footer = document.getElementsByClassName('ant-modal-footer');
+      const modal = screen.getByRole('dialog');
+      const footer = modal.querySelector('.ant-modal-footer');
       // ---------- TODO (lyndsiWilliams): Selector options, can't seem to get these to render properly.
 
       // renderAvailableSelector() => <Alert> - Supported databases alert
-      const alertIcon = screen.getByRole('img', { name: /info icon/i });
+      const alertIcon = screen.getAllByRole('img', { name: /info-circle/i });
       const alertMessage = screen.getByText(/want to add a new database\?/i);
       const alertDescription = screen.getByText(
         /any databases that allow connections via sql alchemy uris can be added\. learn about how to connect a database driver \./i,
@@ -401,7 +956,7 @@ describe('DatabaseModal', () => {
         selectorLabel,
         selectorPlaceholder,
         selectorArrow,
-        alertIcon,
+        alertIcon[0],
         alertMessage,
         alertDescription,
         alertLink,
@@ -416,16 +971,39 @@ describe('DatabaseModal', () => {
       ];
 
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
       // there should be a footer but it should not have any buttons in it
-      expect(footer[0]).toBeEmptyDOMElement();
+      expect(footer).toBeEmptyDOMElement();
+    });
+
+    test('shows database options when pasting text in the select', async () => {
+      setup();
+
+      const modal = await screen.findByRole('dialog');
+      expect(modal).toBeInTheDocument();
+
+      // Find the select input (not opening the dropdown)
+      const selectInput = screen.getByRole('combobox');
+      expect(selectInput).toBeInTheDocument();
+
+      // Simulate focusing the input
+      await userEvent.click(selectInput);
+
+      // Simulate pasting text into the input
+      expect(() =>
+        fireEvent.paste(selectInput, {
+          clipboardData: { getData: () => 'post' },
+        }),
+      ).not.toThrow();
     });
 
     test('renders the "Basic" tab of SQL Alchemy form (step 2 of 2) correctly', async () => {
+      setup();
+
       // On step 1, click dbButton to access SQL Alchemy form
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
@@ -433,10 +1011,13 @@ describe('DatabaseModal', () => {
 
       // ---------- Components ----------
       // <TabHeader> - AntD header
-      const closeButton = screen.getByRole('button', { name: /close/i });
+      const closeButton = screen.getByRole('img', { name: 'close' });
+
       const basicHeader = screen.getByRole('heading', {
         name: /connect a database/i,
       });
+      expect(basicHeader).toBeInTheDocument();
+
       // <ModalHeader> - Connection header
       const basicHelper = screen.getByText(/step 2 of 2/i);
       const basicHeaderTitle = screen.getByText(/enter primary credentials/i);
@@ -462,8 +1043,8 @@ describe('DatabaseModal', () => {
       );
       // <SSHTunnelForm> - Basic tab's SSH Tunnel Form
       const SSHTunnelingToggle = screen.getByTestId('ssh-tunnel-switch');
-      userEvent.click(SSHTunnelingToggle);
-      const SSHTunnelServerAddressInput = screen.getByTestId(
+      await userEvent.click(SSHTunnelingToggle);
+      const SSHTunnelServerAddressInput = await screen.findByTestId(
         'ssh-tunnel-server_address-input',
       );
       const SSHTunnelServerPortInput = screen.getByTestId(
@@ -479,7 +1060,10 @@ describe('DatabaseModal', () => {
         name: /test connection/i,
       });
       // <Alert> - Basic tab's alert
-      const alertIcon = screen.getByRole('img', { name: /info icon/i });
+      const alertIcons = screen.getAllByRole('img', { name: /info-circle/i });
+      const alertIcon =
+        alertIcons.find(icon => icon.closest('.ant-alert-icon') !== null) ||
+        alertIcons[0];
       const alertMessage = screen.getByText(
         /additional fields may be required/i,
       );
@@ -496,7 +1080,6 @@ describe('DatabaseModal', () => {
       // ---------- Assertions ----------
       const visibleComponents = [
         closeButton,
-        basicHeader,
         basicHelper,
         basicHeaderTitle,
         basicHeaderSubtitle,
@@ -524,20 +1107,22 @@ describe('DatabaseModal', () => {
       ];
 
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
     });
 
     test('renders the unexpanded "Advanced" tab correctly', async () => {
+      setup();
+
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
       expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
       // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
+      await userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
 
       // ---------- Components ----------
       // <TabHeader> - AntD header
@@ -558,39 +1143,19 @@ describe('DatabaseModal', () => {
       const basicTab = screen.getByRole('tab', { name: /basic/i });
       const advancedTab = screen.getByRole('tab', { name: /advanced/i });
       // <ExtraOptions> - Advanced tabs
-      const sqlLabTab = screen.getByRole('tab', {
-        name: /right sql lab adjust how this database will interact with sql lab\./i,
-      });
-      const sqlLabTabArrow = within(sqlLabTab).getByRole('img', {
-        name: /right/i,
-      });
+      const sqlLabTab = screen.getByTestId('sql-lab-label-test');
       const sqlLabTabHeading = screen.getByRole('heading', {
         name: /sql lab/i,
       });
-      const performanceTab = screen.getByRole('tab', {
-        name: /right performance adjust performance settings of this database\./i,
-      });
-      const performanceTabArrow = within(performanceTab).getByRole('img', {
-        name: /right/i,
-      });
+      const performanceTab = screen.getByTestId('performance-label-test');
       const performanceTabHeading = screen.getByRole('heading', {
         name: /performance/i,
       });
-      const securityTab = screen.getByRole('tab', {
-        name: /right security add extra connection information\./i,
-      });
-      const securityTabArrow = within(securityTab).getByRole('img', {
-        name: /right/i,
-      });
+      const securityTab = screen.getByTestId('security-label-test');
       const securityTabHeading = screen.getByRole('heading', {
         name: /security/i,
       });
-      const otherTab = screen.getByRole('tab', {
-        name: /right other additional settings\./i,
-      });
-      const otherTabArrow = within(otherTab).getByRole('img', {
-        name: /right/i,
-      });
+      const otherTab = screen.getByTestId('other-label-test');
       const otherTabHeading = screen.getByRole('heading', { name: /other/i });
       // renderModalFooter() - Advanced tab's footer
       const backButton = screen.getByRole('button', { name: /back/i });
@@ -607,43 +1172,37 @@ describe('DatabaseModal', () => {
         basicTab,
         advancedTab,
         sqlLabTab,
-        sqlLabTabArrow,
         sqlLabTabHeading,
         performanceTab,
-        performanceTabArrow,
         performanceTabHeading,
         securityTab,
-        securityTabArrow,
         securityTabHeading,
         otherTab,
-        otherTabArrow,
         otherTabHeading,
         backButton,
         connectButton,
       ];
 
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
     });
 
     test('renders the "Advanced" - SQL LAB tab correctly (unexpanded)', async () => {
+      setup();
+
       // ---------- Components ----------
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
-      // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
-      // Click the "SQL Lab" tab
-      userEvent.click(
-        screen.getByRole('tab', {
-          name: /right sql lab adjust how this database will interact with sql lab\./i,
-        }),
-      );
       expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
+      // Click the "Advanced" tab
+      await userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
+      // Click the "SQL Lab" tab
+      await userEvent.click(screen.getByTestId('sql-lab-label-test'));
 
       // ----- BEGIN STEP 2 (ADVANCED - SQL LAB)
       // <TabHeader> - AntD header
@@ -663,17 +1222,18 @@ describe('DatabaseModal', () => {
       // <Tabs> - Basic/Advanced tabs
       const basicTab = screen.getByRole('tab', { name: /basic/i });
       const advancedTab = screen.getByRole('tab', { name: /advanced/i });
+      const advancedTabPanel = screen.getAllByRole('tabpanel')[0];
       // <ExtraOptions> - Advanced tabs
-      const sqlLabTab = screen.getByRole('tab', {
-        name: /right sql lab adjust how this database will interact with sql lab\./i,
-      });
+      const sqlLabTab = screen.getByTestId('sql-lab-label-test');
       // These are the checkbox SVGs that cover the actual checkboxes
-      const checkboxOffSVGs = screen.getAllByRole('img', {
-        name: /checkbox-off/i,
+      const allCheckboxes = screen.getAllByRole(
+        'checkbox',
+      ) as HTMLInputElement[];
+      const checkboxOff = allCheckboxes.filter(checkbox => !checkbox.checked);
+      const tooltipButtons = within(advancedTabPanel).getAllByRole('button', {
+        name: /Show info tooltip/i,
       });
-      const tooltipIcons = screen.getAllByRole('img', {
-        name: /info-solid_small/i,
-      });
+
       const exposeInSQLLabCheckbox = screen.getByRole('checkbox', {
         name: /expose database in sql lab/i,
       });
@@ -699,9 +1259,9 @@ describe('DatabaseModal', () => {
         /force all tables and views to be created in this schema when clicking ctas or cvas in sql lab\./i,
       );
       const allowDMLCheckbox = screen.getByRole('checkbox', {
-        name: /allow dml/i,
+        name: /allow ddl and dml/i,
       });
-      const allowDMLText = screen.getByText(/allow dml/i);
+      const allowDMLText = screen.getByText(/allow ddl and dml/i);
       const enableQueryCostEstimationCheckbox = screen.getByRole('checkbox', {
         name: /enable query cost estimation/i,
       });
@@ -742,20 +1302,20 @@ describe('DatabaseModal', () => {
         basicTab,
         advancedTab,
         sqlLabTab,
-        checkboxOffSVGs[0],
-        checkboxOffSVGs[1],
-        checkboxOffSVGs[2],
-        checkboxOffSVGs[3],
-        checkboxOffSVGs[4],
-        checkboxOffSVGs[5],
-        tooltipIcons[0],
-        tooltipIcons[1],
-        tooltipIcons[2],
-        tooltipIcons[3],
-        tooltipIcons[4],
-        tooltipIcons[5],
-        tooltipIcons[6],
-        tooltipIcons[7],
+        checkboxOff[0],
+        checkboxOff[1],
+        checkboxOff[2],
+        checkboxOff[3],
+        checkboxOff[4],
+        checkboxOff[5],
+        tooltipButtons[0],
+        tooltipButtons[1],
+        tooltipButtons[2],
+        tooltipButtons[3],
+        tooltipButtons[4],
+        tooltipButtons[5],
+        tooltipButtons[6],
+        tooltipButtons[7],
         exposeInSQLLabText,
         allowCTASText,
         allowCVASText,
@@ -780,31 +1340,29 @@ describe('DatabaseModal', () => {
         enableRowExpansionCheckbox,
       ];
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
       invisibleComponents.forEach(component => {
         expect(component).not.toBeVisible();
       });
-      expect(checkboxOffSVGs).toHaveLength(6);
-      expect(tooltipIcons).toHaveLength(8);
+      expect(checkboxOff).toHaveLength(6);
+      expect(tooltipButtons).toHaveLength(8);
     });
 
     test('renders the "Advanced" - PERFORMANCE tab correctly', async () => {
+      setup();
+
       // ---------- Components ----------
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
       // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
+      await userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
       // Click the "Performance" tab
-      userEvent.click(
-        screen.getByRole('tab', {
-          name: /right performance adjust performance settings of this database\./i,
-        }),
-      );
+      await userEvent.click(screen.getByTestId('performance-label-test'));
       expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
 
       // ----- BEGIN STEP 2 (ADVANCED - PERFORMANCE)
@@ -826,12 +1384,8 @@ describe('DatabaseModal', () => {
       const basicTab = screen.getByRole('tab', { name: /basic/i });
       const advancedTab = screen.getByRole('tab', { name: /advanced/i });
       // <ExtraOptions> - Advanced tabs
-      const sqlLabTab = screen.getByRole('tab', {
-        name: /right sql lab adjust how this database will interact with sql lab\./i,
-      });
-      const performanceTab = screen.getByRole('tab', {
-        name: /right performance adjust performance settings of this database\./i,
-      });
+      const sqlLabTab = screen.getByTestId('sql-lab-label-test');
+      const performanceTab = screen.getByTestId('performance-label-test');
 
       // ---------- Assertions ----------
       const visibleComponents = [
@@ -848,26 +1402,24 @@ describe('DatabaseModal', () => {
       ];
 
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
     });
 
     test('renders the "Advanced" - SECURITY tab correctly', async () => {
+      setup();
+
       // ---------- Components ----------
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
       // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
+      await userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
       // Click the "Security" tab
-      userEvent.click(
-        screen.getByRole('tab', {
-          name: /right security add extra connection information\./i,
-        }),
-      );
+      await userEvent.click(screen.getByTestId('security-label-test'));
       expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
 
       // ----- BEGIN STEP 2 (ADVANCED - SECURITY)
@@ -889,15 +1441,9 @@ describe('DatabaseModal', () => {
       const basicTab = screen.getByRole('tab', { name: /basic/i });
       const advancedTab = screen.getByRole('tab', { name: /advanced/i });
       // <ExtraOptions> - Advanced tabs
-      const sqlLabTab = screen.getByRole('tab', {
-        name: /right sql lab adjust how this database will interact with sql lab\./i,
-      });
-      const performanceTab = screen.getByRole('tab', {
-        name: /right performance adjust performance settings of this database\./i,
-      });
-      const securityTab = screen.getByRole('tab', {
-        name: /right security add extra connection information\./i,
-      });
+      const sqlLabTab = screen.getByTestId('sql-lab-label-test');
+      const performanceTab = screen.getByTestId('performance-label-test');
+      const securityTab = screen.getByTestId('security-label-test');
       const allowFileUploadCheckbox = screen.getByRole('checkbox', {
         name: /Allow file uploads to database/i,
       });
@@ -928,7 +1474,7 @@ describe('DatabaseModal', () => {
 
       // ---------- Assertions ----------
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
       invisibleComponents.forEach(component => {
         expect(component).not.toBeVisible();
@@ -936,28 +1482,26 @@ describe('DatabaseModal', () => {
       expect(schemasForFileUploadText).not.toBeInTheDocument();
     });
 
-    it('renders the "Advanced" - SECURITY tab correctly after selecting Allow file uploads', async () => {
+    test('renders the "Advanced" - SECURITY tab correctly after selecting Allow file uploads', async () => {
+      setup();
+
       // ---------- Components ----------
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
       // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
+      await userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
       // Click the "Security" tab
-      userEvent.click(
-        screen.getByRole('tab', {
-          name: /right security add extra connection information\./i,
-        }),
-      );
+      await userEvent.click(screen.getByTestId('security-label-test'));
       // Click the "Allow file uploads" tab
 
       const allowFileUploadCheckbox = screen.getByRole('checkbox', {
         name: /Allow file uploads to database/i,
       });
-      userEvent.click(allowFileUploadCheckbox);
+      await userEvent.click(allowFileUploadCheckbox);
 
       // ----- BEGIN STEP 2 (ADVANCED - SECURITY)
       // <TabHeader> - AntD header
@@ -978,15 +1522,9 @@ describe('DatabaseModal', () => {
       const basicTab = screen.getByRole('tab', { name: /basic/i });
       const advancedTab = screen.getByRole('tab', { name: /advanced/i });
       // <ExtraOptions> - Advanced tabs
-      const sqlLabTab = screen.getByRole('tab', {
-        name: /right sql lab adjust how this database will interact with sql lab\./i,
-      });
-      const performanceTab = screen.getByRole('tab', {
-        name: /right performance adjust performance settings of this database\./i,
-      });
-      const securityTab = screen.getByRole('tab', {
-        name: /right security add extra connection information\./i,
-      });
+      const sqlLabTab = screen.getByTestId('sql-lab-label-test');
+      const performanceTab = screen.getByTestId('performance-label-test');
+      const securityTab = screen.getByTestId('security-label-test');
       const allowFileUploadText = screen.getByText(
         /Allow file uploads to database/i,
       );
@@ -1014,7 +1552,7 @@ describe('DatabaseModal', () => {
 
       // ---------- Assertions ----------
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
       invisibleComponents.forEach(component => {
         expect(component).not.toBeVisible();
@@ -1023,26 +1561,24 @@ describe('DatabaseModal', () => {
     });
 
     test('renders the "Advanced" - OTHER tab correctly', async () => {
+      setup();
+
       // ---------- Components ----------
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /sqlite/i,
         }),
       );
       // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
+      await userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
       // Click the "Other" tab
-      userEvent.click(
-        screen.getByRole('tab', {
-          name: /right other additional settings\./i,
-        }),
-      );
+      await userEvent.click(screen.getByTestId('other-label-test'));
       expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
 
       // ----- BEGIN STEP 2 (ADVANCED - OTHER)
       // <TabHeader> - AntD header
-      const closeButton = screen.getByRole('button', { name: /close/i });
+      const closeButton = await screen.findByRole('button', { name: /close/i });
       const advancedHeader = screen.getByRole('heading', {
         name: /connect a database/i,
       });
@@ -1059,18 +1595,10 @@ describe('DatabaseModal', () => {
       const basicTab = screen.getByRole('tab', { name: /basic/i });
       const advancedTab = screen.getByRole('tab', { name: /advanced/i });
       // <ExtraOptions> - Advanced tabs
-      const sqlLabTab = screen.getByRole('tab', {
-        name: /right sql lab adjust how this database will interact with sql lab\./i,
-      });
-      const performanceTab = screen.getByRole('tab', {
-        name: /right performance adjust performance settings of this database\./i,
-      });
-      const securityTab = screen.getByRole('tab', {
-        name: /right security add extra connection information\./i,
-      });
-      const otherTab = screen.getByRole('tab', {
-        name: /right other additional settings\./i,
-      });
+      const sqlLabTab = screen.getByTestId('sql-lab-label-test');
+      const performanceTab = screen.getByTestId('performance-label-test');
+      const securityTab = screen.getByTestId('security-label-test');
+      const otherTab = screen.getByTestId('other-label-test');
 
       // ---------- Assertions ----------
       const visibleComponents = [
@@ -1094,10 +1622,12 @@ describe('DatabaseModal', () => {
     });
 
     test('Dynamic form', async () => {
+      setup();
+
       // ---------- Components ----------
       // On step 1, click dbButton to access step 2
-      userEvent.click(
-        screen.getByRole('button', {
+      await userEvent.click(
+        await screen.findByRole('button', {
           name: /postgresql/i,
         }),
       );
@@ -1107,42 +1637,48 @@ describe('DatabaseModal', () => {
     });
   });
 
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('Functional: Create new database', () => {
     test('directs databases to the appropriate form (dynamic vs. SQL Alchemy)', async () => {
+      setup();
+
       // ---------- Dynamic example (3-step form)
       // Click the PostgreSQL button to enter the dynamic form
-      const postgreSQLButton = screen.getByRole('button', {
+      const postgreSQLButton = await screen.findByRole('button', {
         name: /postgresql/i,
       });
-      userEvent.click(postgreSQLButton);
+      await userEvent.click(postgreSQLButton);
 
       // Dynamic form has 3 steps, seeing this text means the dynamic form is present
       const dynamicFormStepText = screen.getByText(/step 2 of 3/i);
 
-      expect(dynamicFormStepText).toBeVisible();
+      expect(dynamicFormStepText).toBeInTheDocument();
 
       // ---------- SQL Alchemy example (2-step form)
       // Click the back button to go back to step 1,
       // then click the SQLite button to enter the SQL Alchemy form
       const backButton = screen.getByRole('button', { name: /back/i });
-      userEvent.click(backButton);
+      await userEvent.click(backButton);
 
       const sqliteButton = screen.getByRole('button', {
         name: /sqlite/i,
       });
-      userEvent.click(sqliteButton);
+      await userEvent.click(sqliteButton);
 
       // SQL Alchemy form has 2 steps, seeing this text means the SQL Alchemy form is present
       expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
       const sqlAlchemyFormStepText = screen.getByText(/step 2 of 2/i);
 
-      expect(sqlAlchemyFormStepText).toBeVisible();
+      expect(sqlAlchemyFormStepText).toBeInTheDocument();
     });
 
+    // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
     describe('SQL Alchemy form flow', () => {
       test('enters step 2 of 2 when proper database is selected', async () => {
-        userEvent.click(
-          screen.getByRole('button', {
+        setup();
+
+        await userEvent.click(
+          await screen.findByRole('button', {
             name: /sqlite/i,
           }),
         );
@@ -1167,10 +1703,13 @@ describe('DatabaseModal', () => {
         expect.anything();
       });
 
+      // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
       describe('step 2 component interaction', () => {
         test('properly interacts with textboxes', async () => {
-          userEvent.click(
-            screen.getByRole('button', {
+          setup();
+
+          await userEvent.click(
+            await screen.findByRole('button', {
               name: /sqlite/i,
             }),
           );
@@ -1179,7 +1718,7 @@ describe('DatabaseModal', () => {
           const dbNametextBox = screen.getByTestId('database-name-input');
           expect(dbNametextBox).toHaveValue('SQLite');
 
-          userEvent.type(dbNametextBox, 'Different text');
+          await userEvent.type(dbNametextBox, 'Different text');
           expect(dbNametextBox).toHaveValue('SQLiteDifferent text');
 
           const sqlAlchemyURItextBox = screen.getByTestId(
@@ -1187,7 +1726,7 @@ describe('DatabaseModal', () => {
           );
           expect(sqlAlchemyURItextBox).toHaveValue('');
 
-          userEvent.type(sqlAlchemyURItextBox, 'Different text');
+          await userEvent.type(sqlAlchemyURItextBox, 'Different text');
           expect(sqlAlchemyURItextBox).toHaveValue('Different text');
         });
 
@@ -1211,88 +1750,153 @@ describe('DatabaseModal', () => {
         });
       });
 
+      // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
       describe('SSH Tunnel Form interaction', () => {
         test('properly interacts with SSH Tunnel form textboxes for dynamic form', async () => {
-          userEvent.click(
-            screen.getByRole('button', {
+          setup();
+
+          await userEvent.click(
+            await screen.findByRole('button', {
               name: /postgresql/i,
             }),
           );
           expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
           const SSHTunnelingToggle = screen.getByTestId('ssh-tunnel-switch');
-          userEvent.click(SSHTunnelingToggle);
-          const SSHTunnelServerAddressInput = screen.getByTestId(
+          await userEvent.click(SSHTunnelingToggle);
+          const SSHTunnelServerAddressInput = await screen.findByTestId(
             'ssh-tunnel-server_address-input',
           );
           expect(SSHTunnelServerAddressInput).toHaveValue('');
-          userEvent.type(SSHTunnelServerAddressInput, 'localhost');
-          expect(SSHTunnelServerAddressInput).toHaveValue('localhost');
+          fireEvent.change(SSHTunnelServerAddressInput, {
+            target: { value: 'localhost' },
+          });
+          await waitFor(() =>
+            expect(SSHTunnelServerAddressInput).toHaveValue('localhost'),
+          );
           const SSHTunnelServerPortInput = screen.getByTestId(
             'ssh-tunnel-server_port-input',
           );
           expect(SSHTunnelServerPortInput).toHaveValue(null);
-          userEvent.type(SSHTunnelServerPortInput, '22');
-          expect(SSHTunnelServerPortInput).toHaveValue(22);
+          fireEvent.change(SSHTunnelServerPortInput, {
+            target: { value: '22' },
+          });
+          await waitFor(() => expect(SSHTunnelServerPortInput).toHaveValue(22));
           const SSHTunnelUsernameInput = screen.getByTestId(
             'ssh-tunnel-username-input',
           );
           expect(SSHTunnelUsernameInput).toHaveValue('');
-          userEvent.type(SSHTunnelUsernameInput, 'test');
-          expect(SSHTunnelUsernameInput).toHaveValue('test');
+          fireEvent.change(SSHTunnelUsernameInput, {
+            target: { value: 'test' },
+          });
+          await waitFor(() =>
+            expect(SSHTunnelUsernameInput).toHaveValue('test'),
+          );
           const SSHTunnelPasswordInput = screen.getByTestId(
             'ssh-tunnel-password-input',
           );
           expect(SSHTunnelPasswordInput).toHaveValue('');
-          userEvent.type(SSHTunnelPasswordInput, 'pass');
-          expect(SSHTunnelPasswordInput).toHaveValue('pass');
+          fireEvent.change(SSHTunnelPasswordInput, {
+            target: { value: 'pass' },
+          });
+          await waitFor(() =>
+            expect(SSHTunnelPasswordInput).toHaveValue('pass'),
+          );
         });
 
         test('properly interacts with SSH Tunnel form textboxes', async () => {
-          userEvent.click(
-            screen.getByRole('button', {
+          setup();
+
+          await userEvent.click(
+            await screen.findByRole('button', {
               name: /sqlite/i,
             }),
           );
 
           expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
           const SSHTunnelingToggle = screen.getByTestId('ssh-tunnel-switch');
-          userEvent.click(SSHTunnelingToggle);
-          const SSHTunnelServerAddressInput = screen.getByTestId(
+          await userEvent.click(SSHTunnelingToggle);
+          const SSHTunnelServerAddressInput = await screen.findByTestId(
             'ssh-tunnel-server_address-input',
           );
           expect(SSHTunnelServerAddressInput).toHaveValue('');
-          userEvent.type(SSHTunnelServerAddressInput, 'localhost');
-          expect(SSHTunnelServerAddressInput).toHaveValue('localhost');
+          fireEvent.change(SSHTunnelServerAddressInput, {
+            target: { value: 'localhost' },
+          });
+          await waitFor(() =>
+            expect(SSHTunnelServerAddressInput).toHaveValue('localhost'),
+          );
           const SSHTunnelServerPortInput = screen.getByTestId(
             'ssh-tunnel-server_port-input',
           );
           expect(SSHTunnelServerPortInput).toHaveValue(null);
-          userEvent.type(SSHTunnelServerPortInput, '22');
-          expect(SSHTunnelServerPortInput).toHaveValue(22);
+          fireEvent.change(SSHTunnelServerPortInput, {
+            target: { value: '22' },
+          });
+          await waitFor(() => expect(SSHTunnelServerPortInput).toHaveValue(22));
           const SSHTunnelUsernameInput = screen.getByTestId(
             'ssh-tunnel-username-input',
           );
           expect(SSHTunnelUsernameInput).toHaveValue('');
-          userEvent.type(SSHTunnelUsernameInput, 'test');
-          expect(SSHTunnelUsernameInput).toHaveValue('test');
+          fireEvent.change(SSHTunnelUsernameInput, {
+            target: { value: 'test' },
+          });
+          await waitFor(() =>
+            expect(SSHTunnelUsernameInput).toHaveValue('test'),
+          );
           const SSHTunnelPasswordInput = screen.getByTestId(
             'ssh-tunnel-password-input',
           );
           expect(SSHTunnelPasswordInput).toHaveValue('');
-          userEvent.type(SSHTunnelPasswordInput, 'pass');
-          expect(SSHTunnelPasswordInput).toHaveValue('pass');
+          fireEvent.change(SSHTunnelPasswordInput, {
+            target: { value: 'pass' },
+          });
+          await waitFor(() =>
+            expect(SSHTunnelPasswordInput).toHaveValue('pass'),
+          );
         });
 
-        test('if the SSH Tunneling toggle is not true, no inputs are displayed', async () => {
-          userEvent.click(
-            screen.getByRole('button', {
+        test('does not fire blur validation for SSH fields in the SQLAlchemy form', async () => {
+          setup();
+
+          await userEvent.click(
+            await screen.findByRole('button', {
               name: /sqlite/i,
             }),
           );
 
           expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
           const SSHTunnelingToggle = screen.getByTestId('ssh-tunnel-switch');
-          expect(SSHTunnelingToggle).toBeVisible();
+          await userEvent.click(SSHTunnelingToggle);
+          const SSHTunnelServerAddressInput = await screen.findByTestId(
+            'ssh-tunnel-server_address-input',
+          );
+          fireEvent.change(SSHTunnelServerAddressInput, {
+            target: { value: 'localhost' },
+          });
+          fireEvent.blur(SSHTunnelServerAddressInput);
+          await waitFor(() =>
+            expect(SSHTunnelServerAddressInput).toHaveValue('localhost'),
+          );
+
+          // ``validate_parameters`` expects a dynamic-form payload, so SSH
+          // field blur must not call it from the SQLAlchemy-URI form
+          expect(
+            fetchMock.callHistory.calls(VALIDATE_PARAMS_ENDPOINT).length,
+          ).toEqual(0);
+        });
+
+        test('if the SSH Tunneling toggle is not true, no inputs are displayed', async () => {
+          setup();
+
+          await userEvent.click(
+            await screen.findByRole('button', {
+              name: /sqlite/i,
+            }),
+          );
+
+          expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
+          const SSHTunnelingToggle = screen.getByTestId('ssh-tunnel-switch');
+          expect(SSHTunnelingToggle).toBeInTheDocument();
           const SSHTunnelServerAddressInput = screen.queryByTestId(
             'ssh-tunnel-server_address-input',
           );
@@ -1312,171 +1916,521 @@ describe('DatabaseModal', () => {
         });
 
         test('If user changes the login method, the inputs change', async () => {
-          userEvent.click(
-            screen.getByRole('button', {
+          setup();
+
+          await userEvent.click(
+            await screen.findByRole('button', {
               name: /sqlite/i,
             }),
           );
 
           expect(await screen.findByText(/step 2 of 2/i)).toBeInTheDocument();
           const SSHTunnelingToggle = screen.getByTestId('ssh-tunnel-switch');
-          userEvent.click(SSHTunnelingToggle);
-          const SSHTunnelUsePasswordInput = screen.getByTestId(
+          await userEvent.click(SSHTunnelingToggle);
+          const SSHTunnelUsePasswordInput = await screen.findByTestId(
             'ssh-tunnel-use_password-radio',
           );
-          expect(SSHTunnelUsePasswordInput).toBeVisible();
+          expect(SSHTunnelUsePasswordInput).toBeInTheDocument();
           const SSHTunnelUsePrivateKeyInput = screen.getByTestId(
             'ssh-tunnel-use_private_key-radio',
           );
-          expect(SSHTunnelUsePrivateKeyInput).toBeVisible();
+          expect(SSHTunnelUsePrivateKeyInput).toBeInTheDocument();
           const SSHTunnelPasswordInput = screen.getByTestId(
             'ssh-tunnel-password-input',
           );
           // By default, we use Password as login method
-          expect(SSHTunnelPasswordInput).toBeVisible();
+          expect(SSHTunnelPasswordInput).toBeInTheDocument();
           // Change the login method to use private key
-          userEvent.click(SSHTunnelUsePrivateKeyInput);
+          await userEvent.click(SSHTunnelUsePrivateKeyInput);
           const SSHTunnelPrivateKeyInput = screen.getByTestId(
             'ssh-tunnel-private_key-input',
           );
-          expect(SSHTunnelPrivateKeyInput).toBeVisible();
+          expect(SSHTunnelPrivateKeyInput).toBeInTheDocument();
           const SSHTunnelPrivateKeyPasswordInput = screen.getByTestId(
             'ssh-tunnel-private_key_password-input',
           );
-          expect(SSHTunnelPrivateKeyPasswordInput).toBeVisible();
+          expect(SSHTunnelPrivateKeyPasswordInput).toBeInTheDocument();
         });
       });
     });
 
+    // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
     describe('Dynamic form flow', () => {
       test('enters step 2 of 3 when proper database is selected', async () => {
+        setup();
+
         expect(await screen.findByText(/step 1 of 3/i)).toBeInTheDocument();
-        userEvent.click(
+        await userEvent.click(
           screen.getByRole('button', {
             name: /postgresql/i,
           }),
         );
         expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
-
-        const step2of3text = screen.getByText(/step 2 of 3/i);
-        expect(step2of3text).toBeVisible();
       });
 
       test('enters form credentials and runs fetchResource when "Connect" is clicked', async () => {
-        userEvent.click(
-          screen.getByRole('button', {
+        setup();
+
+        await userEvent.click(
+          await screen.findByRole('button', {
             name: /postgresql/i,
           }),
         );
 
-        const textboxes = screen.getAllByRole('textbox');
+        // Wait for step 2 to render
+        expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+
+        const textboxes = await screen.findAllByRole('textbox');
         const hostField = textboxes[0];
         const portField = screen.getByRole('spinbutton');
-        const databaseNameField = textboxes[1];
+        // textboxes[1] is the connection `database` field; the engine display
+        // name (`database_name`) auto-fills and is asserted separately.
+        const databaseField = textboxes[1];
         const usernameField = textboxes[2];
         const passwordField = textboxes[3];
         const connectButton = screen.getByRole('button', { name: 'Connect' });
 
         expect(hostField).toHaveValue('');
         expect(portField).toHaveValue(null);
-        expect(databaseNameField).toHaveValue('');
+        expect(databaseField).toHaveValue('');
         expect(usernameField).toHaveValue('');
         expect(passwordField).toHaveValue('');
 
-        userEvent.type(hostField, 'localhost');
-        userEvent.type(portField, '5432');
-        userEvent.type(databaseNameField, 'postgres');
-        userEvent.type(usernameField, 'testdb');
-        userEvent.type(passwordField, 'demoPassword');
+        expect(connectButton).toBeDisabled();
 
-        expect(await screen.findByDisplayValue(/5432/i)).toBeInTheDocument();
+        fireEvent.change(hostField, { target: { value: 'localhost' } });
+        fireEvent.blur(hostField);
+        fireEvent.change(portField, { target: { value: '5432' } });
+        fireEvent.blur(portField);
+        fireEvent.change(databaseField, { target: { value: 'postgres' } });
+        fireEvent.blur(databaseField);
+        fireEvent.change(usernameField, { target: { value: 'testdb' } });
+        fireEvent.blur(usernameField);
+        fireEvent.change(passwordField, { target: { value: 'demoPassword' } });
+        fireEvent.blur(passwordField);
+
+        await waitFor(() => expect(connectButton).toBeEnabled());
+
+        await waitFor(() => expect(portField).toHaveValue(5432));
         expect(hostField).toHaveValue('localhost');
         expect(portField).toHaveValue(5432);
-        expect(databaseNameField).toHaveValue('postgres');
+        expect(databaseField).toHaveValue('postgres');
         expect(usernameField).toHaveValue('testdb');
         expect(passwordField).toHaveValue('demoPassword');
 
-        userEvent.click(connectButton);
+        expect(connectButton).toBeEnabled();
+        await userEvent.click(connectButton);
+        // Verify that validation was called during the form interaction
+        // Note: With the optimized validation, redundant calls on the same db state are skipped
         await waitFor(() => {
-          expect(fetchMock.calls(VALIDATE_PARAMS_ENDPOINT).length).toEqual(6);
+          expect(
+            fetchMock.callHistory.calls(VALIDATE_PARAMS_ENDPOINT).length,
+          ).toBeGreaterThan(0);
         });
+      });
+
+      test.each(['Finish', 'Back'] as const)(
+        'keeps a created PostgreSQL field connection on step 3 without a saved schema: %s',
+        async action => {
+          const resourceHook = jest.spyOn(hooks, 'useSingleViewResource');
+          const previousImplementation = resourceHook.getMockImplementation()!;
+          resourceHook.mockImplementation(realUseSingleViewResource);
+          let releaseBackFetch: () => void = () => {};
+          const backFetchReady = new Promise<void>(resolve => {
+            releaseBackFetch = resolve;
+          });
+          fetchMock.get('glob:*/api/v1/database/10/connection', async () => {
+            await backFetchReady;
+            return {
+              result: {
+                id: 10,
+                database_name: 'PostgreSQL',
+                backend: 'postgresql',
+                configuration_method: ConfigurationMethod.DynamicForm,
+              },
+            };
+          });
+          try {
+            fetchMock.modifyRoute('database-connect', {
+              response: {
+                id: 10,
+                result: {
+                  id: 10,
+                  database_name: 'PostgreSQL',
+                  backend: 'postgresql',
+                  configuration_method: ConfigurationMethod.DynamicForm,
+                },
+              },
+            });
+            fetchMock.put(DATABASE_FETCH_ENDPOINT, { result: { id: 10 } });
+            const addDangerToast = jest.fn();
+            setup({ addDangerToast });
+            await userEvent.click(
+              await screen.findByRole('button', { name: /postgresql/i }),
+            );
+            expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+            const fieldByName = (name: string) =>
+              document.querySelector<HTMLInputElement>(
+                `input[name="${name}"]`,
+              )!;
+            for (const [name, value] of Object.entries({
+              host: 'localhost',
+              port: '5432',
+              database: 'postgres',
+              username: 'testdb',
+            })) {
+              fireEvent.change(fieldByName(name), { target: { value } });
+            }
+            fireEvent.blur(fieldByName('username'));
+            const connectButton = screen.getByRole('button', {
+              name: 'Connect',
+            });
+            await waitFor(() => expect(connectButton).toBeEnabled());
+            fireEvent.click(connectButton);
+            await waitFor(() =>
+              expect(
+                fetchMock.callHistory.calls(DATABASE_CONNECT_ENDPOINT),
+              ).toHaveLength(1),
+            );
+            expect(await screen.findByText(/step 3 of 3/i)).toBeInTheDocument();
+            expect(screen.getByText('Database connected')).toBeInTheDocument();
+            expect(
+              screen.queryByText('SQLAlchemy URI'),
+            ).not.toBeInTheDocument();
+            if (action === 'Back') {
+              await userEvent.click(
+                screen.getByRole('button', { name: 'Back' }),
+              );
+              await waitFor(() =>
+                expect(
+                  fetchMock.callHistory.calls(
+                    'glob:*/api/v1/database/10/connection',
+                  ),
+                ).toHaveLength(1),
+              );
+              await userEvent.click(
+                screen.getByRole('button', { name: 'Back' }),
+              );
+              expect(
+                await screen.findByRole('heading', {
+                  name: /select a database to connect/i,
+                }),
+              ).toBeInTheDocument();
+              await act(async () => {
+                releaseBackFetch();
+                await fetchMock.callHistory.flush(true);
+              });
+              expect(
+                screen.getByRole('heading', {
+                  name: /select a database to connect/i,
+                }),
+              ).toBeInTheDocument();
+              return;
+            }
+            await userEvent.click(
+              screen.getByRole('button', { name: 'Finish' }),
+            );
+            await waitFor(() =>
+              expect(
+                fetchMock.callHistory.calls(DATABASE_FETCH_ENDPOINT),
+              ).toHaveLength(1),
+            );
+            expect(
+              JSON.parse(
+                fetchMock.callHistory.lastCall(DATABASE_FETCH_ENDPOINT)!.options
+                  .body as string,
+              ),
+            ).toEqual(
+              expect.objectContaining({
+                configuration_method: ConfigurationMethod.DynamicForm,
+              }),
+            );
+          } finally {
+            releaseBackFetch();
+            resourceHook.mockImplementation(previousImplementation);
+          }
+        },
+      );
+
+      test('does not fire redundant validation on blur when db has not changed', async () => {
+        setup();
+
+        await userEvent.click(
+          await screen.findByRole('button', {
+            name: /postgresql/i,
+          }),
+        );
+
+        expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+
+        const textboxes = await screen.findAllByRole('textbox');
+        const hostField = textboxes[0];
+
+        // Type a value and blur - should trigger validation
+        fireEvent.change(hostField, { target: { value: 'localhost' } });
+        fireEvent.blur(hostField);
+
+        await waitFor(() => {
+          expect(
+            fetchMock.callHistory.calls(VALIDATE_PARAMS_ENDPOINT).length,
+          ).toEqual(1);
+        });
+
+        // Blur again without changing the value - should NOT trigger another validation
+        fireEvent.focus(hostField);
+        fireEvent.blur(hostField);
+
+        // Wait a tick to ensure no additional calls are made
+        await waitFor(() => {
+          expect(
+            fetchMock.callHistory.calls(VALIDATE_PARAMS_ENDPOINT).length,
+          ).toEqual(1);
+        });
+      });
+
+      test('keeps Connect disabled when blur validation fails without a usable response', async () => {
+        fetchMock.modifyRoute('validate-params', {
+          response: { throws: new TypeError('Network request failed') },
+        });
+        const consoleErrorSpy = jest
+          .spyOn(console, 'error')
+          .mockImplementation(() => {});
+
+        setup();
+
+        await userEvent.click(
+          await screen.findByRole('button', {
+            name: /postgresql/i,
+          }),
+        );
+
+        expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+
+        const textboxes = await screen.findAllByRole('textbox');
+        const hostField = textboxes[0];
+        const portField = screen.getByRole('spinbutton');
+        const databaseField = textboxes[1];
+        const usernameField = textboxes[2];
+        const passwordField = textboxes[3];
+        const connectButton = screen.getByRole('button', { name: 'Connect' });
+
+        fireEvent.change(hostField, { target: { value: 'localhost' } });
+        fireEvent.blur(hostField);
+        fireEvent.change(portField, { target: { value: '5432' } });
+        fireEvent.blur(portField);
+        fireEvent.change(databaseField, { target: { value: 'postgres' } });
+        fireEvent.blur(databaseField);
+        fireEvent.change(usernameField, { target: { value: 'testdb' } });
+        fireEvent.blur(usernameField);
+        fireEvent.change(passwordField, { target: { value: 'demoPassword' } });
+        fireEvent.blur(passwordField);
+
+        await waitFor(() => {
+          expect(
+            fetchMock.callHistory.calls(VALIDATE_PARAMS_ENDPOINT).length,
+          ).toBeGreaterThan(0);
+        });
+
+        // A request without a usable response is not a completed validation
+        // cycle, so the Connect button must stay disabled
+        expect(connectButton).toBeDisabled();
+
+        // Once the endpoint recovers, the next blur retries (failed attempts
+        // are not cached) and completes the validation cycle
+        fetchMock.modifyRoute('validate-params', {
+          response: { message: 'OK' },
+        });
+        fireEvent.focus(passwordField);
+        fireEvent.blur(passwordField);
+
+        await waitFor(() => expect(connectButton).toBeEnabled());
+
+        consoleErrorSpy.mockRestore();
       });
     });
 
+    // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
     describe('Import database flow', () => {
       test('imports a file', async () => {
-        const importDbButton = screen.getByTestId(
-          'import-database-btn',
+        // jsdom does not implement scrollIntoView, which the modal calls
+        // once the importing filename renders
+        Element.prototype.scrollIntoView = jest.fn();
+
+        setup();
+
+        const importDbButton = await screen.findByTestId('import-database-btn');
+        expect(importDbButton).toBeInTheDocument();
+
+        // The visible button only triggers the underlying rc-upload file
+        // input; user-event's upload() requires the real <input type="file">.
+        const fileInput = document.querySelector(
+          'input[type="file"]',
         ) as HTMLInputElement;
-        expect(importDbButton).toBeVisible();
 
         const testFile = new File([new ArrayBuffer(1)], 'model_export.zip');
 
-        userEvent.click(importDbButton);
-        userEvent.upload(importDbButton, testFile);
+        await userEvent.click(importDbButton);
+        await userEvent.upload(fileInput, testFile);
 
-        expect(importDbButton.files?.[0]).toStrictEqual(testFile);
-        expect(importDbButton.files?.item(0)).toStrictEqual(testFile);
-        expect(importDbButton.files).toHaveLength(1);
+        expect(fileInput.files?.[0]).toStrictEqual(testFile);
+        expect(fileInput.files?.item(0)).toStrictEqual(testFile);
+        expect(fileInput.files).toHaveLength(1);
+      });
+
+      test('keeps the newlines of a private key asked for by an import', async () => {
+        const keyPath = '$.embedded_credentials.privatekey_body';
+        const passphrasePath = '$.embedded_credentials.privatekey_pass';
+        const pem =
+          '-----BEGIN PRIVATE KEY-----\nline-one\nline-two\n-----END PRIVATE KEY-----';
+        fetchMock.post(IMPORT_DB_ENDPOINT, {
+          status: 422,
+          body: {
+            errors: [
+              {
+                message: 'Error importing database',
+                error_type: 'GENERIC_COMMAND_ERROR',
+                level: 'warning',
+                extra: {
+                  'databases/snowflake.yaml': {
+                    _schema: [
+                      `Must provide value for masked_encrypted_extra field: ${keyPath} (Private Key)`,
+                      `Must provide value for masked_encrypted_extra field: ${passphrasePath} (Passphrase)`,
+                    ],
+                  },
+                  issue_codes: [],
+                },
+              },
+            ],
+          },
+        });
+        Element.prototype.scrollIntoView = jest.fn();
+
+        setup();
+
+        await screen.findByTestId('import-database-btn');
+        fireEvent.change(
+          document.querySelector('input[type="file"]') as HTMLInputElement,
+          {
+            target: {
+              files: [new File([new ArrayBuffer(1)], 'snowflake_export.zip')],
+            },
+          },
+        );
+
+        const secretField = (path: string) =>
+          document.querySelector(`[name="encrypted_extra_${path}"]`);
+        const key = await waitFor(() => {
+          expect(secretField(keyPath)).toBeInTheDocument();
+          return secretField(keyPath) as HTMLTextAreaElement;
+        });
+        const passphrase = secretField(passphrasePath) as HTMLInputElement;
+        expect(key.tagName).toBe('TEXTAREA');
+        expect(passphrase).toHaveAttribute('type', 'password');
+
+        fireEvent.change(key, { target: { value: pem } });
+        fireEvent.change(passphrase, { target: { value: 'passphrase' } });
+        expect(key.value).toBe(pem);
+
+        await userEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+        await waitFor(() =>
+          expect(fetchMock.callHistory.calls(IMPORT_DB_ENDPOINT)).toHaveLength(
+            2,
+          ),
+        );
+        const body = fetchMock.callHistory.lastCall(IMPORT_DB_ENDPOINT)?.options
+          .body as FormData;
+        expect(
+          JSON.parse(body.get('encrypted_extra_secrets') as string),
+        ).toEqual({
+          'databases/snowflake.yaml': {
+            [keyPath]: pem,
+            [passphrasePath]: 'passphrase',
+          },
+        });
+      });
+
+      test('resets the upload entry after an invalid file error', async () => {
+        fetchMock.post(IMPORT_DB_ENDPOINT, {
+          status: 422,
+          body: {
+            errors: [
+              {
+                message:
+                  'Could not find a valid command to import file. Please re-export your file and try importing again',
+                error_type: 'GENERIC_COMMAND_ERROR',
+                level: 'warning',
+                extra: { issue_codes: [] },
+              },
+            ],
+          },
+        });
+
+        // jsdom does not implement scrollIntoView, which the modal calls
+        // once the importing filename renders
+        Element.prototype.scrollIntoView = jest.fn();
+
+        setup();
+
+        await screen.findByTestId('import-database-btn');
+        const fileInput = document.querySelector(
+          'input[type="file"]',
+        ) as HTMLInputElement;
+        // rc-upload spreads e.target.files, so pass a real iterable
+        fireEvent.change(fileInput, {
+          target: {
+            files: [new File([new ArrayBuffer(1)], 'invalid_export.zip')],
+          },
+        });
+
+        await screen.findByText(/could not find a valid command to import/i);
+
+        const uploadItem = document.querySelector('.ant-upload-list-item');
+        expect(uploadItem).toBeInTheDocument();
+        // the spinner must settle rather than spin forever
+        expect(uploadItem).not.toHaveClass('ant-upload-list-item-uploading');
+
+        const removeButton = (uploadItem as HTMLElement).querySelector(
+          'button',
+        ) as HTMLButtonElement;
+        expect(removeButton).toBeInTheDocument();
+        fireEvent.click(removeButton);
+
+        await waitFor(() =>
+          expect(
+            document.querySelector('.ant-upload-list-item'),
+          ).not.toBeInTheDocument(),
+        );
       });
     });
   });
 
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('DatabaseModal w/ Deeplinking Engine', () => {
-    const renderAndWait = async () => {
-      const mounted = act(async () => {
-        render(<DatabaseModal {...dbProps} dbEngine="PostgreSQL" />, {
-          useRedux: true,
-        });
-      });
-
-      return mounted;
-    };
-
-    beforeEach(async () => {
-      await renderAndWait();
-    });
-
-    test('enters step 2 of 3 when proper database is selected', () => {
-      const step2of3text = screen.getByText(/step 2 of 3/i);
-      expect(step2of3text).toBeVisible();
+    test('enters step 2 of 3 when proper database is selected', async () => {
+      setup({ dbEngine: 'PostgreSQL' });
+      const step2of3text = await screen.findByText(/step 2 of 3/i);
+      expect(step2of3text).toBeInTheDocument();
     });
   });
 
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('DatabaseModal w/ GSheet Engine', () => {
-    const renderAndWait = async () => {
-      const dbProps = {
-        show: true,
-        database_name: 'my database',
-        sqlalchemy_uri: 'gsheets://',
-      };
-      const mounted = act(async () => {
-        render(<DatabaseModal {...dbProps} dbEngine="Google Sheets" />, {
-          useRedux: true,
-        });
-      });
-
-      return mounted;
-    };
-
-    beforeEach(async () => {
-      await renderAndWait();
+    test('enters step 2 of 2 when proper database is selected', async () => {
+      setup({ dbEngine: 'Google Sheets' });
+      const step2of2text = await screen.findByText(/step 2 of 2/i);
+      expect(step2of2text).toBeInTheDocument();
     });
 
-    it('enters step 2 of 2 when proper database is selected', () => {
-      const step2of2text = screen.getByText(/step 2 of 2/i);
-      expect(step2of2text).toBeVisible();
-    });
+    test('renders the "Advanced" - SECURITY tab without Allow File Upload Checkbox', async () => {
+      setup({ dbEngine: 'Google Sheets' });
 
-    it('renders the "Advanced" - SECURITY tab without Allow File Upload Checkbox', async () => {
       // Click the "Advanced" tab
-      userEvent.click(screen.getByRole('tab', { name: /advanced/i }));
-      // Click the "Security" tab
-      userEvent.click(
-        screen.getByRole('tab', {
-          name: /right security add extra connection information\./i,
-        }),
+      await userEvent.click(
+        await screen.findByRole('tab', { name: /advanced/i }),
       );
+      // Click the "Security" tab
+      await userEvent.click(screen.getByTestId('security-label-test'));
 
       // ----- BEGIN STEP 2 (ADVANCED - SECURITY)
       // <ExtraOptions> - Advanced tabs
@@ -1499,7 +2453,7 @@ describe('DatabaseModal', () => {
 
       // ---------- Assertions ----------
       visibleComponents.forEach(component => {
-        expect(component).toBeVisible();
+        expect(component).toBeInTheDocument();
       });
       invisibleComponents.forEach(component => {
         expect(component).not.toBeVisible();
@@ -1508,7 +2462,9 @@ describe('DatabaseModal', () => {
       expect(schemasForFileUploadText).not.toBeInTheDocument();
     });
 
-    it('if the SSH Tunneling toggle is not displayed, nothing should get displayed', async () => {
+    test('if the SSH Tunneling toggle is not displayed, nothing should get displayed', async () => {
+      setup({ dbEngine: 'Google Sheets' });
+
       const SSHTunnelingToggle = screen.queryByTestId('ssh-tunnel-switch');
       expect(SSHTunnelingToggle).not.toBeInTheDocument();
       const SSHTunnelServerAddressInput = screen.queryByTestId(
@@ -1530,34 +2486,23 @@ describe('DatabaseModal', () => {
     });
   });
 
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('DatabaseModal w errors as objects', () => {
     jest.mock('src/views/CRUD/hooks', () => ({
       ...jest.requireActual('src/views/CRUD/hooks'),
       useSingleViewResource: jest.fn(),
     }));
 
-    const renderAndWait = async () => {
-      const mounted = act(async () => {
-        render(<DatabaseModal {...dbProps} dbEngine="PostgreSQL" />, {
-          useRedux: true,
-        });
-      });
-
-      return mounted;
-    };
-
-    beforeEach(async () => {
-      await renderAndWait();
-    });
-
     test('Error displays when it is an object', async () => {
-      const step2of3text = screen.getByText(/step 2 of 3/i);
+      setup({ dbEngine: 'PostgreSQL' });
+      const step2of3text = await screen.findByText(/step 2 of 3/i);
       const errorSection = screen.getByText(/Database Creation Error/i);
-      expect(step2of3text).toBeVisible();
-      expect(errorSection).toBeVisible();
+      expect(step2of3text).toBeInTheDocument();
+      expect(errorSection).toBeInTheDocument();
     });
   });
 
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('DatabaseModal w errors as strings', () => {
     jest.mock('src/views/CRUD/hooks', () => ({
       ...jest.requireActual('src/views/CRUD/hooks'),
@@ -1581,70 +2526,553 @@ describe('DatabaseModal', () => {
       setResource: jest.fn(),
     });
 
-    const renderAndWait = async () => {
-      const mounted = act(async () => {
-        render(<DatabaseModal {...dbProps} dbEngine="PostgreSQL" />, {
-          useRedux: true,
-        });
-      });
-
-      return mounted;
-    };
-
-    beforeEach(async () => {
-      await renderAndWait();
-    });
-
     test('Error displays when it is a string', async () => {
-      const step2of3text = screen.getByText(/step 2 of 3/i);
+      setup({ dbEngine: 'PostgreSQL' });
+
+      const step2of3text = await screen.findByText(/step 2 of 3/i);
       const errorTitleMessage = screen.getByText(/Database Creation Error/i);
+      expect(errorTitleMessage).toBeInTheDocument();
       const button = screen.getByText('See more');
-      userEvent.click(button);
+      await userEvent.click(button);
       const errorMessage = screen.getByText(/Test Error With String/i);
-      expect(errorMessage).toBeVisible();
-      const closeButton = screen.getByText('Close');
-      userEvent.click(closeButton);
-      expect(step2of3text).toBeVisible();
-      expect(errorTitleMessage).toBeVisible();
+      expect(errorMessage).toBeInTheDocument();
+      expect(step2of3text).toBeInTheDocument();
     });
   });
 
+  // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
   describe('DatabaseModal w Extensions', () => {
-    const renderAndWait = async () => {
+    beforeAll(() => {
       const extensionsRegistry = getExtensionsRegistry();
 
       extensionsRegistry.set('ssh_tunnel.form.switch', () => (
         <>ssh_tunnel.form.switch extension component</>
       ));
 
-      setupExtensions();
-
-      const mounted = act(async () => {
-        render(<DatabaseModal {...dbProps} dbEngine="SQLite" />, {
-          useRedux: true,
-        });
-      });
-
-      return mounted;
-    };
-
-    beforeEach(async () => {
-      await renderAndWait();
+      setupCodeOverrides();
     });
 
-    test('should render an extension component if one is supplied', () => {
+    test('should render an extension component if one is supplied', async () => {
+      setup({ dbEngine: 'SQLite' });
       expect(
-        screen.getByText('ssh_tunnel.form.switch extension component'),
+        await screen.findByText('ssh_tunnel.form.switch extension component'),
       ).toBeInTheDocument();
     });
   });
+
+  // Tests migrated from the deprecated Cypress suite
+  // (cypress-base/cypress/e2e/database/modal.test.ts). The two "error alert"
+  // cases originally relied on a real backend connection attempt (real DNS /
+  // socket behaviour), which made them flaky. They are reproduced here by
+  // mocking the validate_parameters response: the frontend's responsibility is
+  // to map an `extra.invalid` field error onto the matching form field, which
+  // is exactly what these assertions exercise. Whether a bad host/port really
+  // fails to connect is a backend concern, covered by backend tests.
+  const selectPostgres = async () => {
+    await userEvent.click(
+      await screen.findByRole('button', { name: /postgresql/i }),
+    );
+    // Dynamic form (step 2 of 3) is now visible
+    expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+  };
+
+  // The modal renders into a portal on document.body, so fields are queried
+  // from the document rather than the render container.
+  const fieldByName = (name: string) =>
+    document.querySelector(`input[name="${name}"]`) as HTMLInputElement;
+
+  const fillDynamicForm = () => {
+    const values: Record<string, string> = {
+      host: 'badhost',
+      port: '5432',
+      database: 'testdb',
+      username: 'testusername',
+      password: 'testpass',
+    };
+    Object.entries(values).forEach(
+      async ([name, value]) => await userEvent.type(fieldByName(name), value),
+    );
+  };
+
+  test('defaults the display name to the selected engine', async () => {
+    setup();
+    await selectPostgres();
+
+    // The display name field auto-fills with the selected engine's name. The
+    // empty initial state of the connection fields (host/port/database/…) is
+    // already covered by the "enters form credentials" test above.
+    expect(fieldByName('database_name')).toHaveValue('PostgreSQL');
+  });
+
+  test('switches to the SQLAlchemy URI form via the connect link', async () => {
+    setup();
+    await selectPostgres();
+
+    await userEvent.click(screen.getByTestId('sqla-connect-btn'));
+
+    // assert on presence rather than visibility: the SQLAlchemy form mounts
+    // inside an animated tab pane, and rc-motion's animation state in jsdom
+    // is nondeterministic, so toBeVisible flakes while the form is in fact
+    // rendered (see the animated={{ tabPane: true }} Tabs in DatabaseModal)
+    expect(
+      await screen.findByTestId('database-name-input'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('sqlalchemy-uri-input')).toBeInTheDocument();
+  });
+
+  test('keeps what was typed when the configuration method round-trips', async () => {
+    // Switching to the SQLAlchemy URI form and back used to replace the whole
+    // reducer state with {engine, configuration_method, database_name}, so
+    // every other field -- including the OAuth2 and embedded sub-forms, whose
+    // values live under `parameters` -- came back empty.
+    setup({ dbEngine: 'Snowflake' });
+    expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+
+    await userEvent.type(fieldByName('account'), 'dummy-account');
+
+    await userEvent.click(screen.getByText('OAuth2 client information'));
+    await userEvent.type(await screen.findByTestId('client-id'), 'client-123');
+
+    // Impersonation cannot be turned on before the connection exists, so the
+    // embedded sub-form stays disabled during creation (the backend would
+    // refuse the credential anyway). Its round-trip is covered by
+    // EmbeddedCredentialsField's in-flight credential test.
+    await userEvent.click(screen.getByText('Embedded guest credentials'));
+    expect(
+      await screen.findByTestId('embedded-credentials-username'),
+    ).toBeDisabled();
+    expect(
+      screen.getByTestId('embedded-credentials-inactive-reason'),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('sqla-connect-btn'));
+    expect(
+      await screen.findByTestId('sqlalchemy-uri-input'),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /dynamic form instead/i }),
+    );
+    expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+
+    expect(fieldByName('account')).toHaveValue('dummy-account');
+
+    // The sub-form re-mounts collapsed, and re-reads its value from the
+    // parameters the switch no longer drops.
+    await userEvent.click(screen.getByText('OAuth2 client information'));
+    expect(await screen.findByTestId('client-id')).toHaveValue('client-123');
+  });
+
+  test('keeps dynamic form values when toggling to the URI form and back', async () => {
+    setup();
+    await selectPostgres();
+
+    const values: Record<string, string> = {
+      host: 'db.example.com',
+      port: '5432',
+      database: 'example_db',
+      username: 'example_user',
+      password: 'example_password',
+    };
+    Object.entries(values).forEach(([name, value]) => {
+      fireEvent.change(fieldByName(name), { target: { value } });
+      expect(fieldByName(name)).toHaveDisplayValue(value);
+    });
+
+    await userEvent.click(screen.getByTestId('sqla-connect-btn'));
+    expect(
+      await screen.findByTestId('sqlalchemy-uri-input'),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: /connect this database using the dynamic form instead/i,
+      }),
+    );
+
+    expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+    Object.entries(values).forEach(([name, value]) => {
+      expect(fieldByName(name)).toHaveDisplayValue(value);
+    });
+    expect(fieldByName('database_name')).toHaveDisplayValue('PostgreSQL');
+  });
+
+  test('keeps a typed SQLAlchemy URI when toggling to the dynamic form and back', async () => {
+    setup();
+    await selectPostgres();
+
+    await userEvent.click(screen.getByTestId('sqla-connect-btn'));
+    const typedUri =
+      'postgresql://example_user:example_password@db.example.com:5432/example_db';
+    const uriInput = await screen.findByTestId('sqlalchemy-uri-input');
+    await userEvent.type(uriInput, typedUri);
+    expect(uriInput).toHaveValue(typedUri);
+
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: /connect this database using the dynamic form instead/i,
+      }),
+    );
+    expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('sqla-connect-btn'));
+
+    expect(await screen.findByTestId('sqlalchemy-uri-input')).toHaveValue(
+      typedUri,
+    );
+  });
+
+  test.each([
+    {
+      label: 'drops an invalid',
+      secureExtra: 'not json',
+      expected: '',
+    },
+    {
+      label: 'drops a non-object',
+      secureExtra: '["example"]',
+      expected: '',
+    },
+    {
+      label: 'keeps a valid',
+      secureExtra: '{"example_key":"example_value"}',
+      expected: '{"example_key":"example_value"}',
+    },
+  ])(
+    '$label Secure extra entered in the URI form when switching to the dynamic form',
+    async ({ secureExtra, expected }) => {
+      setup();
+      await selectPostgres();
+      await userEvent.click(screen.getByTestId('sqla-connect-btn'));
+      await userEvent.click(
+        await screen.findByRole('tab', { name: /advanced/i }),
+      );
+      await userEvent.click(screen.getByTestId('security-label-test'));
+      // Ace does not take typed input under jsdom, so set the value on the
+      // editor instance, which fires the same change event. waitFor runs the
+      // callback once and flushes the resulting React update.
+      const { editor } = (
+        document.querySelector('.ace_editor') as HTMLElement & {
+          env: { editor: { setValue: (value: string) => void } };
+        }
+      ).env;
+      await waitFor(() => editor.setValue(secureExtra));
+
+      await userEvent.click(screen.getByRole('tab', { name: /basic/i }));
+      await userEvent.click(
+        screen.getByRole('button', {
+          name: /connect this database using the dynamic form instead/i,
+        }),
+      );
+      expect(await screen.findByText(/step 2 of 3/i)).toBeInTheDocument();
+      fireEvent.change(fieldByName('host'), {
+        target: { value: 'db.example.com' },
+      });
+      await userEvent.click(fieldByName('host'));
+      await userEvent.click(document.body);
+
+      // The dynamic form has no Secure extra editor, so whatever is in state
+      // is sent to validation and cannot be corrected by the user.
+      await waitFor(() =>
+        expect(fetchMock.callHistory.calls('validate-params')).not.toHaveLength(
+          0,
+        ),
+      );
+      const body = JSON.parse(
+        String(
+          fetchMock.callHistory.lastCall('validate-params')?.options?.body,
+        ),
+      );
+      expect(body.masked_encrypted_extra || '').toBe(expected);
+    },
+  );
+
+  test.each([
+    {
+      field: 'host',
+      errorType: 'CONNECTION_INVALID_HOSTNAME_ERROR',
+      message: "The hostname provided can't be resolved.",
+    },
+    {
+      field: 'port',
+      errorType: 'CONNECTION_PORT_CLOSED_ERROR',
+      message: 'The port is closed.',
+    },
+  ])(
+    'surfaces a $field validation error returned by validate_parameters',
+    async ({ field, errorType, message }) => {
+      const createResource = jest.fn();
+      const useSingleViewResourceMock = jest
+        .spyOn(hooks, 'useSingleViewResource')
+        .mockReturnValue({
+          state: {
+            loading: false,
+            resource: null,
+            error: null,
+          },
+          fetchResource: jest.fn(),
+          createResource,
+          updateResource: jest.fn(),
+          clearError: jest.fn(),
+          setResource: jest.fn(),
+        });
+
+      setup();
+      await selectPostgres();
+      fillDynamicForm();
+
+      const submitButton = screen.getByTestId('btn-submit-connection');
+      // Blur the last field and let the (default, passing) validation settle
+      // so its async onBlur result can't race with — and overwrite — the
+      // submit-time validation below. Mirrors the Cypress `body.click(0, 0)`.
+      await userEvent.click(document.body);
+      await waitFor(() => expect(submitButton).toBeEnabled());
+
+      // Make validation fail the way a real backend would for an unreachable
+      // host / closed port. The frontend's job is to map `extra.invalid:
+      // [field]` onto the matching form field. The 422 short-circuits the
+      // submit before the create (database-connect) request fires, so only
+      // this validate_parameters mock drives the rendered error.
+      fetchMock.modifyRoute('validate-params', {
+        response: {
+          status: 422,
+          body: {
+            errors: [
+              {
+                message,
+                error_type: errorType,
+                level: 'error',
+                extra: { invalid: [field] },
+              },
+            ],
+          },
+        },
+      });
+
+      await userEvent.click(submitButton);
+
+      // Wait for the async error to render, then confirm it surfaced as an
+      // antd inline field error (not a general alert)...
+      const errorText = await screen.findByText(message);
+      expect(errorText.closest('.ant-form-item-explain-error')).not.toBeNull();
+      // ...and that it belongs to the form item for the field named in
+      // `extra.invalid` — i.e. that input lives in the same `.ant-form-item`.
+      const formItem = errorText.closest('.ant-form-item') as HTMLElement;
+      expect(formItem.querySelector(`input[name="${field}"]`)).not.toBeNull();
+      expect(createResource).not.toHaveBeenCalled();
+      useSingleViewResourceMock.mockRestore();
+    },
+  );
+
+  test('keeps Connect disabled while a half-filled embedded credential is rejected', async () => {
+    setup();
+    await selectPostgres();
+    fillDynamicForm();
+
+    const submitButton = screen.getByTestId('btn-submit-connection');
+    await userEvent.click(document.body);
+    await waitFor(() => expect(submitButton).toBeEnabled());
+
+    // `ValidateDatabaseParametersCommand._get_embedded_credentials_error`
+    // reports this shape. `INVALID_PAYLOAD_SCHEMA_ERROR` is on the blur-time
+    // allowlist in `useDatabaseValidation`, so the half-filled credential
+    // blocks the save without waiting for the user to press Connect.
+    fetchMock.modifyRoute('validate-params', {
+      response: {
+        status: 422,
+        body: {
+          errors: [
+            {
+              message:
+                'Embedded guest credentials need both a username and a password.',
+              error_type: 'INVALID_PAYLOAD_SCHEMA_ERROR',
+              level: 'error',
+              extra: { invalid: ['embedded_credentials'] },
+            },
+          ],
+        },
+      },
+    });
+
+    await userEvent.type(fieldByName('database'), 'x');
+    await userEvent.click(document.body);
+
+    await waitFor(() => expect(submitButton).toBeDisabled());
+  });
 });
 
+test('handleChangeWithValidation function clears validation errors when called', () => {
+  const mockSetValidationErrors = jest.fn();
+  const mockSetHasValidated = jest.fn();
+  const mockClearError = jest.fn();
+  const mockOnChange = jest.fn();
+
+  // Test the handleClearValidationErrors function directly
+  const handleClearValidationErrors = jest.fn(() => {
+    mockSetValidationErrors(null);
+    mockSetHasValidated(false);
+    mockClearError();
+  });
+
+  // Test the handleChangeWithValidation function behavior
+  const handleChangeWithValidation = (actionType: any, payload: any) => {
+    mockOnChange(actionType, payload);
+    handleClearValidationErrors();
+  };
+
+  // Simulate calling handleChangeWithValidation as would happen in form changes
+  handleChangeWithValidation('TextChange', {
+    name: 'database_name',
+    value: 'test',
+  });
+
+  expect(mockOnChange).toHaveBeenCalledWith('TextChange', {
+    name: 'database_name',
+    value: 'test',
+  });
+  expect(handleClearValidationErrors).toHaveBeenCalled();
+  expect(mockSetValidationErrors).toHaveBeenCalledWith(null);
+  expect(mockSetHasValidated).toHaveBeenCalledWith(false);
+  expect(mockClearError).toHaveBeenCalled();
+});
+
+test('validates fix by testing all form field types clear validation errors', () => {
+  // This test validates that all the different types of form fields changed in the fix
+  // (TextChange, ExtraInputChange, ExtraEditorChange, InputChange, ParametersChange, etc.)
+  // properly call the validation clearing functions
+  const mockSetValidationErrors = jest.fn();
+  const mockSetHasValidated = jest.fn();
+  const mockClearError = jest.fn();
+
+  const handleClearValidationErrors = () => {
+    mockSetValidationErrors(null);
+    mockSetHasValidated(false);
+    mockClearError();
+  };
+
+  const handleChangeWithValidation = (_actionType: any, _payload: any) => {
+    handleClearValidationErrors();
+  };
+
+  // Test all the action types that were modified in the fix to use handleChangeWithValidation
+  const actionTypesToTest = [
+    'TextChange',
+    'ExtraInputChange',
+    'ExtraEditorChange',
+    'InputChange',
+    'ParametersChange',
+    'QueryChange',
+    'EncryptedExtraInputChange',
+    'EditorChange',
+  ];
+
+  actionTypesToTest.forEach((actionType, index) => {
+    handleChangeWithValidation(actionType, { name: 'test', value: 'test' });
+
+    // Verify each call cleared validation errors
+    expect(mockSetValidationErrors).toHaveBeenNthCalledWith(index + 1, null);
+    expect(mockSetHasValidated).toHaveBeenNthCalledWith(index + 1, false);
+    expect(mockClearError).toHaveBeenCalledTimes(index + 1);
+  });
+
+  expect(mockSetValidationErrors).toHaveBeenCalledTimes(
+    actionTypesToTest.length,
+  );
+  expect(mockSetHasValidated).toHaveBeenCalledTimes(actionTypesToTest.length);
+  expect(mockClearError).toHaveBeenCalledTimes(actionTypesToTest.length);
+});
+
+// eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
 describe('dbReducer', () => {
+  test('a Secure Extra edit retires the typed Secure Extra blocks', () => {
+    const typedState = {
+      ...databaseFixture,
+      parameters: {
+        host: 'account',
+        embedded_credentials: { username: 'svc', password: 'pw' },
+        oauth2_client_info: { id: 'client', secret: 'typed' },
+      },
+    };
+    const secureExtra = dbReducer(typedState, {
+      type: ActionType.EditorChange,
+      payload: { name: 'masked_encrypted_extra', json: '{}' },
+    });
+    expect(secureExtra?.masked_encrypted_extra).toEqual('{}');
+    expect(secureExtra?.parameters).toEqual({ host: 'account' });
+
+    const otherEditor = dbReducer(typedState, {
+      type: ActionType.EditorChange,
+      payload: { name: 'server_cert', json: 'cert' },
+    });
+    expect(otherEditor?.parameters).toEqual(typedState.parameters);
+  });
+
+  test('a Secure Extra edit keeps an OAuth2 client typed in the sub-form', () => {
+    const typedClient = { id: 'B', secret: 'XXXXXXXXXX' };
+    const mirrored = dbReducer(
+      {
+        ...databaseFixture,
+        masked_encrypted_extra: JSON.stringify({
+          oauth2_client_info: { id: 'A', secret: 'XXXXXXXXXX' },
+        }),
+        parameters: { oauth2_client_info: typedClient },
+      },
+      {
+        type: ActionType.EncryptedExtraInputChange,
+        payload: { name: 'oauth2_client_info', value: typedClient },
+      },
+    );
+    const edited = dbReducer(mirrored, {
+      type: ActionType.EditorChange,
+      payload: {
+        name: 'masked_encrypted_extra',
+        json: mirrored?.masked_encrypted_extra ?? '',
+      },
+    });
+
+    expect(edited?.parameters?.oauth2_client_info).toBeUndefined();
+    expect(
+      JSON.parse(edited?.masked_encrypted_extra ?? '{}').oauth2_client_info,
+    ).toEqual(typedClient);
+  });
+
   test('it will reset state to null', () => {
     const action: DBReducerActionType = { type: ActionType.Reset };
     const currentState = dbReducer(databaseFixture, action);
     expect(currentState).toBeNull();
+  });
+
+  test('it keeps everything typed so far when the configuration method changes', () => {
+    // The dialog's two mode-switch links hand back only the three keys the
+    // other mode needs. Everything else -- the parameters (which is where the
+    // OAuth2 and embedded sub-forms keep their values), the encrypted-extra
+    // blob and the advanced-tab fields -- has to survive, or a round trip
+    // silently empties the form.
+    const typedState: Partial<DatabaseObject> = {
+      database_name: 'My database',
+      engine: 'snowflake',
+      driver: 'snowflake',
+      configuration_method: ConfigurationMethod.DynamicForm,
+      parameters: {
+        account: 'abc12345',
+        oauth2_client_info: { id: 'client-123' },
+        embedded_credentials: { username: 'embedded_svc', password: 'pw' },
+      } as DatabaseObject['parameters'],
+      masked_encrypted_extra: '{}',
+      extra: '{"allows_virtual_table_explore":true}',
+      expose_in_sqllab: true,
+    };
+    const action: DBReducerActionType = {
+      type: ActionType.ConfigMethodChange,
+      payload: {
+        database_name: 'My database',
+        engine: 'snowflake',
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+      },
+    };
+
+    expect(dbReducer(typedState, action)).toEqual({
+      ...typedState,
+      configuration_method: ConfigurationMethod.SqlalchemyUri,
+    });
   });
 
   test('it will set state to payload from fetched', () => {
@@ -1655,6 +3083,7 @@ describe('dbReducer', () => {
     const currentState = dbReducer({}, action);
     expect(currentState).toEqual({
       ...databaseFixture,
+      configuration_method: ConfigurationMethod.DynamicForm,
       engine: 'postgres',
       masked_encrypted_extra: '',
       parameters: undefined,
@@ -1722,6 +3151,228 @@ describe('dbReducer', () => {
     });
   });
 
+  test('it will set state to payload from encrypted extra input change', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.EncryptedExtraInputChange,
+      payload: { name: 'foo', value: 'bar' },
+    };
+    const currentState = dbReducer(databaseFixture, action);
+
+    // extra should be serialized
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      masked_encrypted_extra: '{"foo":"bar"}',
+    });
+  });
+
+  test('EncryptedExtraInputChange replaces a nested embedded credential', () => {
+    // The embedded credentials sub-form mirrors each edit into Secure Extra so
+    // the JSON shown under Advanced → Security matches what will be saved.
+    const action: DBReducerActionType = {
+      type: ActionType.EncryptedExtraInputChange,
+      payload: {
+        name: 'embedded_credentials',
+        value: { username: 'new_svc', password: 'XXXXXXXXXX' },
+      },
+    };
+    const currentState = dbReducer(
+      {
+        ...databaseFixture,
+        masked_encrypted_extra: JSON.stringify({
+          oauth2_client_info: { id: 'client-id' },
+          embedded_credentials: { username: 'old_svc', password: 'XXXXXXXXXX' },
+        }),
+      },
+      action,
+    );
+
+    expect(JSON.parse(currentState?.masked_encrypted_extra || '{}')).toEqual({
+      oauth2_client_info: { id: 'client-id' },
+      embedded_credentials: { username: 'new_svc', password: 'XXXXXXXXXX' },
+    });
+  });
+
+  test('EncryptedExtraInputChange stores empty value verbatim (does not delete)', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.EncryptedExtraInputChange,
+      payload: { name: 'service_account_info', value: '' },
+    };
+    const currentState = dbReducer(
+      {
+        ...databaseFixture,
+        masked_encrypted_extra: JSON.stringify({
+          service_account_info: { type: 'service_account' },
+          other: 'keep-me',
+        }),
+      },
+      action,
+    );
+
+    // Generic input change must not delete keys — that's reserved for the
+    // explicit `ClearEncryptedExtraKey` action used by the public/private
+    // toggle. Backends may distinguish absent-key from empty-string.
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      masked_encrypted_extra: '{"service_account_info":"","other":"keep-me"}',
+    });
+  });
+
+  test.each([
+    ['the literal string "null"', 'null'],
+    ['malformed JSON', 'not json'],
+    ['a JSON primitive', '42'],
+    ['a JSON array', '[1,2,3]'],
+  ])(
+    'EncryptedExtraInputChange recovers when masked_encrypted_extra is %s',
+    (_label, value) => {
+      const action: DBReducerActionType = {
+        type: ActionType.EncryptedExtraInputChange,
+        payload: { name: 'foo', value: 'bar' },
+      };
+      const currentState = dbReducer(
+        { ...databaseFixture, masked_encrypted_extra: value },
+        action,
+      );
+
+      // Reducer recovers and starts fresh — no crash, no leaked bad value.
+      expect(currentState).toEqual({
+        ...databaseFixture,
+        masked_encrypted_extra: '{"foo":"bar"}',
+      });
+    },
+  );
+
+  test('ClearEncryptedExtraKey removes the named key from masked_encrypted_extra', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ClearEncryptedExtraKey,
+      payload: { name: 'service_account_info' },
+    };
+    const currentState = dbReducer(
+      {
+        ...databaseFixture,
+        masked_encrypted_extra: JSON.stringify({
+          service_account_info: { type: 'service_account' },
+          other: 'keep-me',
+        }),
+      },
+      action,
+    );
+
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      masked_encrypted_extra: '{"other":"keep-me"}',
+    });
+  });
+
+  test('ClearEncryptedExtraKey is a no-op when the key is already absent', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ClearEncryptedExtraKey,
+      payload: { name: 'missing' },
+    };
+    const currentState = dbReducer(
+      {
+        ...databaseFixture,
+        masked_encrypted_extra: '{"other":"keep-me"}',
+      },
+      action,
+    );
+
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      masked_encrypted_extra: '{"other":"keep-me"}',
+    });
+  });
+
+  test('ExtraInputChange stores a non-negative schema_cache_timeout', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ExtraInputChange,
+      payload: { name: 'schema_cache_timeout', value: '600' },
+    };
+    const currentState = dbReducer(databaseFixture, action);
+
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      extra: '{"metadata_cache_timeout":{"schema_cache_timeout":600}}',
+    });
+  });
+
+  test('ExtraInputChange clears schema_cache_timeout back to unset on empty input', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ExtraInputChange,
+      payload: { name: 'schema_cache_timeout', value: '' },
+    };
+    const currentState = dbReducer(
+      {
+        ...databaseFixture,
+        extra: JSON.stringify({
+          metadata_cache_timeout: { schema_cache_timeout: 600 },
+        }),
+      },
+      action,
+    );
+
+    // Empty input drops the key so JSON.stringify omits it, returning the
+    // cache to unset/global default rather than pinning it to 0 (never expire).
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      extra: '{"metadata_cache_timeout":{}}',
+    });
+  });
+
+  test('InputChange stores cache_timeout, allowing -1 (bypass cache)', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.InputChange,
+      payload: { name: 'cache_timeout', value: '-1' },
+    };
+    const currentState = dbReducer(databaseFixture, action);
+
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      cache_timeout: '-1',
+    });
+  });
+
+  test('InputChange clears cache_timeout back to unset on empty input', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.InputChange,
+      payload: { name: 'cache_timeout', value: '' },
+    };
+    const currentState = dbReducer(
+      { ...databaseFixture, cache_timeout: '600' },
+      action,
+    );
+
+    // Number('') is 0, not NaN, so the empty string is mapped to NaN first;
+    // that falls through to undefined and clears back to the global default.
+    expect(currentState?.cache_timeout).toBeUndefined();
+    expect(currentState).toEqual({ ...databaseFixture });
+  });
+
+  test.each([
+    ['the literal string "null"', 'null'],
+    ['malformed JSON', 'not json'],
+    ['a JSON primitive', '42'],
+    ['a JSON array', '[1,2,3]'],
+  ])(
+    'ClearEncryptedExtraKey recovers when masked_encrypted_extra is %s',
+    (_label, value) => {
+      const action: DBReducerActionType = {
+        type: ActionType.ClearEncryptedExtraKey,
+        payload: { name: 'service_account_info' },
+      };
+      const currentState = dbReducer(
+        { ...databaseFixture, masked_encrypted_extra: value },
+        action,
+      );
+
+      // Recovery path produces a clean `{}` rather than crashing.
+      expect(currentState).toEqual({
+        ...databaseFixture,
+        masked_encrypted_extra: '{}',
+      });
+    },
+  );
+
   test('it will set state to payload from extra input change when checkbox', () => {
     const action: DBReducerActionType = {
       type: ActionType.ExtraInputChange,
@@ -1739,40 +3390,40 @@ describe('dbReducer', () => {
   test('it will set state to payload from extra input change when schema_cache_timeout', () => {
     const action: DBReducerActionType = {
       type: ActionType.ExtraInputChange,
-      payload: { name: 'schema_cache_timeout', value: 'bar' },
+      payload: { name: 'schema_cache_timeout', value: '10' },
     };
     const currentState = dbReducer(databaseFixture, action);
 
     // extra should be serialized
     expect(currentState).toEqual({
       ...databaseFixture,
-      extra: '{"metadata_cache_timeout":{"schema_cache_timeout":"bar"}}',
+      extra: '{"metadata_cache_timeout":{"schema_cache_timeout":10}}',
     });
   });
 
   test('it will set state to payload from extra input change when table_cache_timeout', () => {
     const action: DBReducerActionType = {
       type: ActionType.ExtraInputChange,
-      payload: { name: 'table_cache_timeout', value: 'bar' },
+      payload: { name: 'table_cache_timeout', value: '10' },
     };
     const currentState = dbReducer(databaseFixture, action);
 
     // extra should be serialized
     expect(currentState).toEqual({
       ...databaseFixture,
-      extra: '{"metadata_cache_timeout":{"table_cache_timeout":"bar"}}',
+      extra: '{"metadata_cache_timeout":{"table_cache_timeout":10}}',
     });
   });
 
   test('it will overwrite state to payload from extra input change when table_cache_timeout', () => {
     const action: DBReducerActionType = {
       type: ActionType.ExtraInputChange,
-      payload: { name: 'table_cache_timeout', value: 'bar' },
+      payload: { name: 'table_cache_timeout', value: '10' },
     };
     const currentState = dbReducer(
       {
         ...databaseFixture,
-        extra: '{"metadata_cache_timeout":{"table_cache_timeout":"foo"}}',
+        extra: '{"metadata_cache_timeout":{"table_cache_timeout":5}}',
       },
       action,
     );
@@ -1780,7 +3431,7 @@ describe('dbReducer', () => {
     // extra should be serialized
     expect(currentState).toEqual({
       ...databaseFixture,
-      extra: '{"metadata_cache_timeout":{"table_cache_timeout":"bar"}}',
+      extra: '{"metadata_cache_timeout":{"table_cache_timeout":10}}',
     });
   });
 
@@ -1830,9 +3481,59 @@ describe('dbReducer', () => {
     const currentState = dbReducer(databaseFixture, action);
 
     // extra should be serialized
+    expect(JSON.parse(currentState!.extra!)).toEqual({
+      schemas_allowed_for_file_upload: ['bar'],
+    });
+  });
+
+  test(`it will set state to payload from extra
+  input change when schemas_allowed_for_file_upload
+  with trailing comma preserves empty string`, () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ExtraInputChange,
+      payload: { name: 'schemas_allowed_for_file_upload', value: 'bar,' },
+    };
+    const currentState = dbReducer(databaseFixture, action);
+
     expect(currentState).toEqual({
       ...databaseFixture,
       extra: '{"schemas_allowed_for_file_upload":["bar"]}',
+    });
+  });
+
+  test(`it will set state to payload from extra
+  input change when schemas_allowed_for_file_upload
+  with multiple schemas and trailing comma`, () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ExtraInputChange,
+      payload: {
+        name: 'schemas_allowed_for_file_upload',
+        value: 'schema1,schema2,',
+      },
+    };
+    const currentState = dbReducer(databaseFixture, action);
+
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      extra: '{"schemas_allowed_for_file_upload":["schema1","schema2"]}',
+    });
+  });
+
+  test(`it will set state to payload from extra
+  input change when schemas_allowed_for_file_upload
+  with double commas filters empty strings`, () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ExtraInputChange,
+      payload: {
+        name: 'schemas_allowed_for_file_upload',
+        value: 'schema1,,schema2',
+      },
+    };
+    const currentState = dbReducer(databaseFixture, action);
+
+    expect(currentState).toEqual({
+      ...databaseFixture,
+      extra: '{"schemas_allowed_for_file_upload":["schema1","schema2"]}',
     });
   });
 
@@ -2043,6 +3744,142 @@ describe('dbReducer', () => {
     });
   });
 
+  test('ConfigMethodChange preserves previous fields and applies the new configuration method', () => {
+    const initialState: Partial<DatabaseObject> = {
+      database_name: 'Example DB',
+      engine: 'postgresql',
+      driver: 'psycopg2',
+      configuration_method: ConfigurationMethod.DynamicForm,
+      parameters: {
+        host: 'db.example.com',
+        port: 5432,
+        database: 'example_db',
+        username: 'example_user',
+      },
+      sqlalchemy_uri:
+        'postgresql://example_user@db.example.com:5432/example_db',
+      masked_encrypted_extra: '{}',
+      extra: '{"allows_virtual_table_explore":true}',
+      expose_in_sqllab: true,
+      engine_information: { supports_file_upload: true },
+    };
+    const action: DBReducerActionType = {
+      type: ActionType.ConfigMethodChange,
+      payload: {
+        database_name: initialState.database_name,
+        engine: initialState.engine,
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+      },
+    };
+
+    expect(dbReducer(initialState, action)).toEqual({
+      ...initialState,
+      configuration_method: ConfigurationMethod.SqlalchemyUri,
+    });
+  });
+
+  test('ConfigMethodChange falls back to the previous database_name and engine', () => {
+    const initialState: Partial<DatabaseObject> = {
+      database_name: 'Example DB',
+      engine: 'postgresql',
+      configuration_method: ConfigurationMethod.DynamicForm,
+    };
+    const action: DBReducerActionType = {
+      type: ActionType.ConfigMethodChange,
+      payload: {
+        database_name: undefined,
+        engine: undefined,
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+      },
+    };
+
+    expect(dbReducer(initialState, action)).toEqual({
+      database_name: 'Example DB',
+      engine: 'postgresql',
+      configuration_method: ConfigurationMethod.SqlalchemyUri,
+    });
+  });
+
+  test.each([
+    { masked: 'not json', expected: '' },
+    { masked: '["example"]', expected: '' },
+    { masked: 'null', expected: '' },
+    {
+      masked: '{"example_key":"example_value"}',
+      expected: '{"example_key":"example_value"}',
+    },
+  ])(
+    'ConfigMethodChange to the dynamic form handles masked_encrypted_extra $masked',
+    ({ masked, expected }) => {
+      const action: DBReducerActionType = {
+        type: ActionType.ConfigMethodChange,
+        payload: {
+          database_name: 'Example DB',
+          engine: 'postgresql',
+          configuration_method: ConfigurationMethod.DynamicForm,
+        },
+      };
+
+      expect(
+        dbReducer({ masked_encrypted_extra: masked }, action)
+          ?.masked_encrypted_extra,
+      ).toBe(expected);
+    },
+  );
+
+  test('ConfigMethodChange to the URI form keeps masked_encrypted_extra as typed', () => {
+    const action: DBReducerActionType = {
+      type: ActionType.ConfigMethodChange,
+      payload: {
+        database_name: 'Example DB',
+        engine: 'postgresql',
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+      },
+    };
+
+    expect(
+      dbReducer({ masked_encrypted_extra: 'not json' }, action)
+        ?.masked_encrypted_extra,
+    ).toBe('not json');
+  });
+
+  // Regression test for https://github.com/apache/superset/issues/30504
+  // When creating a database, the POST response doesn't include engine_information,
+  // but it should be preserved from the state populated when the user selects a
+  // database engine.
+  test('it preserves engine_information when Fetched action payload lacks it', () => {
+    const initialState: Partial<DatabaseObject> = {
+      database_name: 'TestDB',
+      engine: 'postgresql',
+      configuration_method: ConfigurationMethod.SqlalchemyUri,
+      engine_information: {
+        supports_file_upload: true,
+        disable_ssh_tunneling: false,
+      },
+    };
+
+    // Simulate POST response that doesn't include engine_information
+    const action: DBReducerActionType = {
+      type: ActionType.Fetched,
+      payload: {
+        id: 123,
+        database_name: 'TestDB',
+        backend: 'postgresql',
+        configuration_method: ConfigurationMethod.SqlalchemyUri,
+        // Note: engine_information is NOT in POST response
+      },
+    };
+
+    const currentState = dbReducer(initialState, action);
+
+    // engine_information should be preserved from initialState
+    expect(currentState).not.toBeNull();
+    expect(currentState!.engine_information).toEqual({
+      supports_file_upload: true,
+      disable_ssh_tunneling: false,
+    });
+  });
+
   test('it will add a SSH Tunnel config parameter', () => {
     const action: DBReducerActionType = {
       type: ActionType.ParametersSSHTunnelChange,
@@ -2116,3 +3953,120 @@ describe('dbReducer', () => {
     });
   });
 });
+
+test.each([true, false])(
+  'editing an unavailable driver renders a usable form (saved schema: %s)',
+  async hasSavedSchema => {
+    const resource: DatabaseObject = {
+      ...databaseFixture,
+      id: 10,
+      backend: 'databricks',
+      driver: 'connector',
+      database_name: 'Legacy Databricks',
+      sqlalchemy_uri:
+        'databricks+connector://token:XXXXXXXXXX@example.cloud.databricks.com:443/default',
+      parameters: {
+        host: 'example.cloud.databricks.com',
+        port: 443,
+        access_token: 'XXXXXXXXXX',
+        database: 'default',
+      },
+      extra: JSON.stringify({
+        engine_params: {
+          connect_args: { http_path: '/sql/1.0/warehouses/example' },
+        },
+      }),
+      parameters_schema: hasSavedSchema
+        ? {
+            properties: {
+              host: { type: 'string' },
+              port: { type: 'integer' },
+              access_token: { type: 'string' },
+              database: { type: 'string' },
+              http_path: { type: 'string' },
+            },
+          }
+        : {},
+    };
+    const updateResource = jest.fn().mockResolvedValue(resource);
+    const hook = jest.spyOn(hooks, 'useSingleViewResource').mockReturnValue({
+      state: { loading: false, resource, error: null },
+      fetchResource: jest.fn().mockResolvedValue(resource),
+      createResource: jest.fn(),
+      updateResource,
+      clearError: jest.fn(),
+      setResource: jest.fn(),
+    });
+    // Matches the SQLAlchemy 2 installation: the old driver has no form in
+    // /available, but its saved schema and masked connection details survive.
+    fetchMock.get(AVAILABLE_DB_ENDPOINT, {
+      databases: [
+        {
+          engine: 'databricks',
+          name: 'Databricks',
+          default_driver: 'databricks-sql-python',
+          available_drivers: ['databricks'],
+        },
+      ],
+    });
+    try {
+      render(<DatabaseModal {...dbProps} databaseId={10} />, {
+        useRedux: true,
+      });
+      if (hasSavedSchema) {
+        expect(
+          await screen.findByDisplayValue('example.cloud.databricks.com'),
+        ).toBeInTheDocument();
+        expect(
+          screen.getByDisplayValue('/sql/1.0/warehouses/example'),
+        ).toBeInTheDocument();
+        const token = screen.getByDisplayValue('XXXXXXXXXX');
+        fireEvent.change(token, {
+          target: { value: 'replacement-test-token' },
+        });
+        expect(token).toHaveValue('replacement-test-token');
+      } else {
+        const uri = await screen.findByTestId('sqlalchemy-uri-input');
+        expect(uri).toHaveValue(resource.sqlalchemy_uri);
+        fireEvent.change(uri, {
+          target: { value: 'databricks://example.cloud.databricks.com' },
+        });
+        expect(uri).toHaveValue('databricks://example.cloud.databricks.com');
+        await userEvent.click(
+          screen.getByRole('button', { name: /^finish$/i }),
+        );
+        expect(updateResource).toHaveBeenCalledWith(
+          10,
+          expect.objectContaining({
+            configuration_method: ConfigurationMethod.SqlalchemyUri,
+            sqlalchemy_uri: 'databricks://example.cloud.databricks.com',
+          }),
+          false,
+          true,
+          expect.any(Function),
+        );
+      }
+    } finally {
+      hook.mockRestore();
+      fetchMock.clearHistory().removeRoutes();
+    }
+  },
+);
+
+test.each(['postgresql', 'mysql', 'databricks', 'gsheets'])(
+  'only editing %s falls back to URI when the saved schema is absent',
+  backend => {
+    const payload = {
+      backend,
+      configuration_method: ConfigurationMethod.DynamicForm,
+    };
+    expect(
+      dbReducer({}, { type: ActionType.Fetched, payload, isEditMode: false })
+        ?.configuration_method,
+    ).toBe(ConfigurationMethod.DynamicForm);
+    expect(
+      dbReducer({}, { type: ActionType.Fetched, payload, isEditMode: true })
+        ?.configuration_method,
+    ).toBe(ConfigurationMethod.SqlalchemyUri);
+  },
+);

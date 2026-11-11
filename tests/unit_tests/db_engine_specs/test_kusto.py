@@ -19,7 +19,10 @@ from datetime import datetime
 from typing import Optional
 
 import pytest
+from sqlalchemy import column
 
+from superset.db_engine_specs.kusto import KustoKqlEngineSpec
+from superset.sql.parse import SQLScript
 from tests.unit_tests.db_engine_specs.utils import assert_convert_dttm
 from tests.unit_tests.fixtures.common import dttm  # noqa: F401
 
@@ -27,86 +30,54 @@ from tests.unit_tests.fixtures.common import dttm  # noqa: F401
 @pytest.mark.parametrize(
     "sql,expected",
     [
-        ("SELECT foo FROM tbl", True),
+        ("SELECT foo FROM tbl", False),
         ("SHOW TABLES", False),
         ("EXPLAIN SELECT foo FROM tbl", False),
-        ("INSERT INTO tbl (foo) VALUES (1)", False),
+        ("INSERT INTO tbl (foo) VALUES (1)", True),
     ],
 )
-def test_sql_is_readonly_query(sql: str, expected: bool) -> None:
+def test_sql_has_mutation(sql: str, expected: bool) -> None:
     """
     Make sure that SQL dialect consider only SELECT statements as read-only
     """
 
     from superset.db_engine_specs.kusto import KustoSqlEngineSpec
-    from superset.sql_parse import ParsedQuery
 
-    parsed_query = ParsedQuery(sql)
-    is_readonly = KustoSqlEngineSpec.is_readonly_query(parsed_query)
-
-    assert expected == is_readonly
+    assert (
+        SQLScript(
+            sql,
+            engine=KustoSqlEngineSpec.engine,
+        ).has_mutation()
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
     "kql,expected",
     [
-        ("tbl | limit 100", True),
-        ("let foo = 1; tbl | where bar == foo", True),
+        ("tbl | limit 100", False),
+        ("let foo = 1; tbl | where bar == foo", False),
         (".show tables", False),
+        ("print 1", False),
+        ("set querytrace; Events | take 100", False),
+        (".drop table foo", True),
+        (".set-or-append table foo <| bar", True),
     ],
 )
-def test_kql_is_select_query(kql: str, expected: bool) -> None:
-    """
-    Make sure that KQL dialect consider only statements that do not start with "." (dot)
-    as a SELECT statements
-    """
-
-    from superset.db_engine_specs.kusto import KustoKqlEngineSpec
-    from superset.sql_parse import ParsedQuery
-
-    parsed_query = ParsedQuery(kql)
-    is_select = KustoKqlEngineSpec.is_select_query(parsed_query)
-
-    assert expected == is_select
-
-
-@pytest.mark.parametrize(
-    "kql,expected",
-    [
-        ("tbl | limit 100", True),
-        ("let foo = 1; tbl | where bar == foo", True),
-        (".show tables", True),
-        ("print 1", True),
-        ("set querytrace; Events | take 100", True),
-        (".drop table foo", False),
-        (".set-or-append table foo <| bar", False),
-    ],
-)
-def test_kql_is_readonly_query(kql: str, expected: bool) -> None:
+def test_kql_has_mutation(kql: str, expected: bool) -> None:
     """
     Make sure that KQL dialect consider only SELECT statements as read-only
     """
 
     from superset.db_engine_specs.kusto import KustoKqlEngineSpec
-    from superset.sql_parse import ParsedQuery
 
-    parsed_query = ParsedQuery(kql)
-    is_readonly = KustoKqlEngineSpec.is_readonly_query(parsed_query)
-
-    assert expected == is_readonly
-
-
-def test_kql_parse_sql() -> None:
-    """
-    parse_sql method should always return a list with a single element
-    which is an original query
-    """
-
-    from superset.db_engine_specs.kusto import KustoKqlEngineSpec
-
-    queries = KustoKqlEngineSpec.parse_sql("let foo = 1; tbl | where bar == foo")
-
-    assert queries == ["let foo = 1; tbl | where bar == foo"]
+    assert (
+        SQLScript(
+            kql,
+            engine=KustoKqlEngineSpec.engine,
+        ).has_mutation()
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -123,7 +94,7 @@ def test_kql_convert_dttm(
     expected_result: Optional[str],
     dttm: datetime,  # noqa: F811
 ) -> None:
-    from superset.db_engine_specs.kusto import KustoKqlEngineSpec as spec
+    from superset.db_engine_specs.kusto import KustoKqlEngineSpec as spec  # noqa: N813
 
     assert_convert_dttm(spec, target_type, expected_result, dttm)
 
@@ -143,6 +114,113 @@ def test_sql_convert_dttm(
     expected_result: Optional[str],
     dttm: datetime,  # noqa: F811
 ) -> None:
-    from superset.db_engine_specs.kusto import KustoSqlEngineSpec as spec
+    from superset.db_engine_specs.kusto import KustoSqlEngineSpec as spec  # noqa: N813
 
     assert_convert_dttm(spec, target_type, expected_result, dttm)
+
+
+@pytest.mark.parametrize(
+    "in_duration,expected_result",
+    [
+        ("PT1S", "bin(temporal,1s)"),
+        ("PT1M", "bin(temporal,1m)"),
+        ("PT5M", "bin(temporal,5m)"),
+        ("PT1H", "bin(temporal,1h)"),
+        ("P1D", "startofday(temporal)"),
+        ("P1W", "startofweek(temporal)"),
+        ("P1M", "startofmonth(temporal)"),
+        ("P1Y", "startofyear(temporal)"),
+    ],
+)
+def test_timegrain_expressions(in_duration: str, expected_result: str) -> None:
+    col = column("temporal")
+
+    actual_result = KustoKqlEngineSpec.get_timestamp_expr(
+        col=col, pdf=None, time_grain=in_duration
+    )
+    assert str(actual_result) == expected_result
+
+
+def test_epoch_to_dttm() -> None:
+    """
+    Test that KQL engine spec returns correct epoch to datetime conversion template.
+    """
+    result = KustoKqlEngineSpec.epoch_to_dttm()
+    assert result == "unixtime_seconds_todatetime({col})"
+
+
+def test_epoch_ms_to_dttm() -> None:
+    """
+    Test that KQL engine spec returns correct epoch milliseconds to
+    datetime conversion template.
+    """
+    result = KustoKqlEngineSpec.epoch_ms_to_dttm()
+    assert result == "unixtime_milliseconds_todatetime({col})"
+
+
+def test_handle_null_filter() -> None:
+    """
+    Test that KQL engine spec uses isnull/isnotnull functions for null filters.
+    """
+    from superset.utils.core import FilterOperator
+
+    test_col = column("test_column")
+
+    # Test IS_NULL - should return isnull(col)
+    result_null = KustoKqlEngineSpec.handle_null_filter(
+        test_col, FilterOperator.IS_NULL
+    )
+    assert str(result_null) == "isnull(test_column)"
+
+    # Test IS_NOT_NULL - should return isnotnull(col)
+    result_not_null = KustoKqlEngineSpec.handle_null_filter(
+        test_col, FilterOperator.IS_NOT_NULL
+    )
+    assert str(result_not_null) == "isnotnull(test_column)"
+
+    # Test invalid operator - should raise ValueError
+    with pytest.raises(ValueError, match="Invalid null filter operator"):
+        KustoKqlEngineSpec.handle_null_filter(test_col, "INVALID_OPERATOR")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("raw_query", "expected_query"),
+    [
+        (
+            'database("superset").["FreeCodeCamp"] | extend ["age"] = ARRAY(["age"]) '
+            '| project ["age"] | take 100',
+            'database("superset").["FreeCodeCamp"] | extend ["age"] = ["age"] '
+            '| project ["age"] | take 100',
+        ),
+        (
+            'database("superset").["FreeCodeCamp"] | project ["age"] | take 100',
+            'database("superset").["FreeCodeCamp"] | project ["age"] | take 100',
+        ),
+        (
+            'database("superset").["VideoGameSales"]'
+            ' | where ["rank"]<= 25'
+            ' | summarize ["SUM(Global_Sales)"] = sum(["global_sales"])'
+            '  by ["publisher"]'
+            ' | project ["publisher"], ["SUM(Global_Sales)"]'
+            ' | order by ["SUM(Global_Sales)"] desc'
+            " | take 50000",
+            'database("superset").["VideoGameSales"]'
+            ' | where ["rank"]<= 25'
+            ' | summarize ["SUM(Global_Sales)"] = sum(["global_sales"])'
+            '  by ["publisher"]'
+            ' | project ["publisher"], ["SUM(Global_Sales)"]'
+            ' | order by ["SUM(Global_Sales)"] desc'
+            " | take 50000",
+        ),
+    ],
+)
+def test_kql_execute_array_processing(raw_query: str, expected_query: str) -> None:
+    """Ensure `execute` replaces ARRAY wrappers and leaves other queries unchanged."""
+    from unittest.mock import Mock
+
+    mock_cursor = Mock()
+    mock_db = Mock()
+
+    KustoKqlEngineSpec.execute(mock_cursor, raw_query, mock_db)
+
+    mock_cursor.execute.assert_called_once_with(expected_query)

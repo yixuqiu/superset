@@ -40,8 +40,7 @@ from sqlalchemy import (  # noqa: E402
     UniqueConstraint,
 )
 from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
-from sqlalchemy.ext.declarative import declarative_base  # noqa: E402
-from sqlalchemy.orm import backref, relationship  # noqa: E402
+from sqlalchemy.orm import backref, declarative_base, relationship  # noqa: E402
 
 Base = declarative_base()
 
@@ -142,7 +141,7 @@ class SqlaTable(Base):
         return f"[{self.database}].[{self.table_name}](id:{self.id})"
 
 
-def upgrade():
+def upgrade():  # noqa: C901
     """
     Previous sqla_viz behaviour when creating a virtual dataset was faulty
     by creating an associated data access permission with [None] on the database name.
@@ -169,7 +168,7 @@ def upgrade():
         match_ds_id = re.match(r"\[None\]\.\[.*\]\(id:(\d+)\)", faulty_view_menu.name)
         if match_ds_id:
             dataset_id = int(match_ds_id.group(1))
-            dataset = session.query(SqlaTable).get(dataset_id)
+            dataset = session.get(SqlaTable, dataset_id)
             if dataset:
                 try:
                     new_view_menu = dataset.get_perm()

@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import json
 from contextlib import contextmanager
 from typing import Any, Optional
 from uuid import uuid4
@@ -23,6 +22,7 @@ from uuid import uuid4
 from flask_appbuilder.security.sqla.models import User
 
 from superset import db, security_manager
+from superset.key_value.models import KeyValueEntry
 from superset.models.core import Database
 from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
@@ -35,21 +35,40 @@ from superset.reports.models import (
     ReportScheduleType,
     ReportState,
 )
+from superset.subjects.models import Subject
+from superset.subjects.types import SubjectType
+from superset.utils import json
 from superset.utils.core import override_user
 from tests.integration_tests.test_app import app  # noqa: F401
 from tests.integration_tests.utils import read_fixture
 
 TEST_ID = str(uuid4())
 CSV_FILE = read_fixture("trends.csv")
+# Reports fetch tabular data as opaque bytes from the (mocked) chart export
+# endpoint, so any distinct non-empty payload is sufficient for Excel tests.
+XLSX_FILE: bytes = b"PK\x03\x04 mock xlsx bytes"
 SCREENSHOT_FILE = read_fixture("sample.png")
 DEFAULT_OWNER_EMAIL = "admin@fab.org"
+
+
+def _subjects_for_users(users: list[User]) -> list[Subject]:
+    """Look up USER-type Subject records for a list of User objects."""
+    return [
+        subject
+        for user in users
+        if (
+            subject := db.session.query(Subject)
+            .filter_by(user_id=user.id, type=SubjectType.USER)
+            .first()
+        )
+    ]
 
 
 def insert_report_schedule(
     type: str,
     name: str,
     crontab: str,
-    owners: list[User],
+    editors: list[Subject] | None = None,
     timezone: Optional[str] = None,
     sql: Optional[str] = None,
     description: Optional[str] = None,
@@ -66,13 +85,26 @@ def insert_report_schedule(
     logs: Optional[list[ReportExecutionLog]] = None,
     extra: Optional[dict[Any, Any]] = None,
     force_screenshot: bool = False,
+    retry_on_failure: bool = False,
+    retry_max_attempts: int = 3,
+    send_failed_reports: bool = False,
+    retry_notify_owners: bool = True,
+    retry_notify_recipients: bool = False,
 ) -> ReportSchedule:
-    owners = owners or []
+    editors = editors or []
+    editor_users = [s.user for s in editors if s.type == SubjectType.USER and s.user]
     recipients = recipients or []
     logs = logs or []
     last_state = last_state or ReportState.NOOP
 
-    with override_user(owners[0]):
+    # created_by/changed_by are populated by AuditMixin's column defaults, which
+    # are only evaluated when the row is actually flushed. The override_user
+    # context therefore has to remain active through add()/commit() (not just
+    # construction) so the flush sees the intended editor as the ambient user --
+    # otherwise the row ends up authored by whoever (if anyone) is ambiently
+    # logged in, and EDITOR executor resolution -- which now only trusts
+    # changed_by/created_by -- can't resolve it back to an attached editor.
+    with override_user(editor_users[0] if editor_users else None):
         report_schedule = ReportSchedule(
             type=type,
             name=name,
@@ -83,7 +115,7 @@ def insert_report_schedule(
             chart=chart,
             dashboard=dashboard,
             database=database,
-            owners=owners,
+            editors=editors,
             validator_type=validator_type,
             validator_config_json=validator_config_json,
             log_retention=log_retention,
@@ -94,9 +126,14 @@ def insert_report_schedule(
             report_format=report_format,
             extra=extra,
             force_screenshot=force_screenshot,
+            retry_on_failure=retry_on_failure,
+            retry_max_attempts=retry_max_attempts,
+            send_failed_reports=send_failed_reports,
+            retry_notify_owners=retry_notify_owners,
+            retry_notify_recipients=retry_notify_recipients,
         )
-    db.session.add(report_schedule)
-    db.session.commit()
+        db.session.add(report_schedule)
+        db.session.commit()
     return report_schedule
 
 
@@ -115,20 +152,30 @@ def create_report_notification(
     name: Optional[str] = None,
     extra: Optional[dict[str, Any]] = None,
     force_screenshot: bool = False,
-    owners: Optional[list[User]] = None,
+    editors: list[Subject] | None = None,
+    ccTarget: Optional[str] = None,  # noqa: N803
+    bccTarget: Optional[str] = None,  # noqa: N803
+    use_slack_v2: bool = False,
+    retry_on_failure: bool = False,
+    retry_max_attempts: int = 3,
+    send_failed_reports: bool = False,
+    retry_notify_owners: bool = True,
+    retry_notify_recipients: bool = False,
 ) -> ReportSchedule:
-    if not owners:
-        owners = [
-            (
-                db.session.query(security_manager.user_model)
-                .filter_by(email=DEFAULT_OWNER_EMAIL)
-                .one_or_none()
-            )
-        ]
+    if not editors:
+        default_owner = (
+            db.session.query(security_manager.user_model)
+            .filter_by(email=DEFAULT_OWNER_EMAIL)
+            .one_or_none()
+        )
+        editors = _subjects_for_users([default_owner]) if default_owner else []
 
     if slack_channel:
+        type = (
+            ReportRecipientType.SLACKV2 if use_slack_v2 else ReportRecipientType.SLACK
+        )
         recipient = ReportRecipients(
-            type=ReportRecipientType.SLACK,
+            type=type,
             recipient_config_json=json.dumps(
                 {
                     "target": slack_channel,
@@ -138,7 +185,9 @@ def create_report_notification(
     else:
         recipient = ReportRecipients(
             type=ReportRecipientType.EMAIL,
-            recipient_config_json=json.dumps({"target": email_target}),
+            recipient_config_json=json.dumps(
+                {"target": email_target, "ccTarget": ccTarget, "bccTarget": bccTarget}
+            ),
         )
 
     if name is None:
@@ -154,26 +203,35 @@ def create_report_notification(
         dashboard=dashboard,
         database=database,
         recipients=[recipient],
-        owners=owners,
+        editors=editors,
         validator_type=validator_type,
         validator_config_json=validator_config_json,
         grace_period=grace_period,
         report_format=report_format or ReportDataFormat.PNG,
         extra=extra,
         force_screenshot=force_screenshot,
+        retry_on_failure=retry_on_failure,
+        retry_max_attempts=retry_max_attempts,
+        send_failed_reports=send_failed_reports,
+        retry_notify_owners=retry_notify_owners,
+        retry_notify_recipients=retry_notify_recipients,
     )
     return report_schedule
 
 
-def cleanup_report_schedule(report_schedule: ReportSchedule) -> None:
-    db.session.query(ReportExecutionLog).filter(
-        ReportExecutionLog.report_schedule == report_schedule
-    ).delete()
-    db.session.query(ReportRecipients).filter(
-        ReportRecipients.report_schedule == report_schedule
-    ).delete()
-
-    db.session.delete(report_schedule)
+def cleanup_report_schedule(report_schedule: Optional[ReportSchedule] = None) -> None:
+    if report_schedule:
+        db.session.query(ReportExecutionLog).filter(
+            ReportExecutionLog.report_schedule == report_schedule
+        ).delete()
+        db.session.query(ReportRecipients).filter(
+            ReportRecipients.report_schedule == report_schedule
+        ).delete()
+        db.session.delete(report_schedule)
+    else:
+        db.session.query(ReportExecutionLog).delete()
+        db.session.query(ReportRecipients).delete()
+        db.session.query(ReportSchedule).delete()
     db.session.commit()
 
 
@@ -199,3 +257,8 @@ def create_dashboard_report(dashboard, extra, **kwargs):
 
     if error:
         raise error
+
+
+def reset_key_values() -> None:
+    db.session.query(KeyValueEntry).delete()
+    db.session.commit()

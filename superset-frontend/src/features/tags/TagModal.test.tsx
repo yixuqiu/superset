@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React from 'react';
 import { render, screen } from 'spec/helpers/testing-library';
 import TagModal from 'src/features/tags/TagModal';
 import fetchMock from 'fetch-mock';
@@ -44,6 +43,11 @@ test('renders correctly in create mode', () => {
 
   expect(getByPlaceholderText('Name of your tag')).toBeInTheDocument();
   expect(getByText('Create Tag')).toBeInTheDocument();
+});
+
+test('description input has an accessible name', async () => {
+  render(<TagModal {...mockedProps} />);
+  expect(await screen.findByLabelText('Tag description')).toBeInTheDocument();
 });
 
 test('renders correctly in edit mode', () => {

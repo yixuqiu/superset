@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from functools import partial
 from typing import Optional
 
 from flask_babel import lazy_gettext as _
@@ -24,12 +25,13 @@ from superset.commands.database.exceptions import (
     DatabaseDeleteDatasetsExistFailedError,
     DatabaseDeleteFailedError,
     DatabaseDeleteFailedReportsExistError,
+    DatabaseDeleteSoftDeletedDatasetsExistFailedError,
     DatabaseNotFoundError,
 )
 from superset.daos.database import DatabaseDAO
-from superset.daos.exceptions import DAODeleteFailedError
 from superset.daos.report import ReportScheduleDAO
 from superset.models.core import Database
+from superset.utils.decorators import on_error, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +41,11 @@ class DeleteDatabaseCommand(BaseCommand):
         self._model_id = model_id
         self._model: Optional[Database] = None
 
+    @transaction(on_error=partial(on_error, reraise=DatabaseDeleteFailedError))
     def run(self) -> None:
         self.validate()
         assert self._model
-
-        try:
-            DatabaseDAO.delete([self._model])
-        except DAODeleteFailedError as ex:
-            logger.exception(ex.exception)
-            raise DatabaseDeleteFailedError() from ex
+        DatabaseDAO.delete([self._model])
 
     def validate(self) -> None:
         # Validate/populate model exists
@@ -64,6 +62,41 @@ class DeleteDatabaseCommand(BaseCommand):
                     report_names=",".join(report_names),
                 )
             )
-        # Check if there are datasets for this database
-        if self._model.tables:
+        # Check if there are datasets for this database. ``self._model.tables``
+        # would now hide soft-deleted datasets (``SqlaTable`` inherits
+        # ``SoftDeleteMixin``, so the relationship lazy-load applies the
+        # visibility filter), letting a database whose datasets are all
+        # soft-deleted look empty and be hard-deleted while ``tables.database_id``
+        # rows still reference it. Count with the visibility filter bypassed so
+        # soft-deleted datasets still block the delete.
+        from superset.connectors.sqla.models import (  # pylint: disable=import-outside-toplevel
+            SqlaTable,
+        )
+        from superset.extensions import (  # pylint: disable=import-outside-toplevel
+            db,
+        )
+        from superset.models.helpers import (  # pylint: disable=import-outside-toplevel
+            skip_visibility_filter,
+        )
+
+        with skip_visibility_filter(db.session, SqlaTable):
+            has_live = db.session.query(
+                db.session.query(SqlaTable.id)
+                .filter(
+                    SqlaTable.database_id == self._model_id,
+                    SqlaTable.deleted_at.is_(None),
+                )
+                .exists()
+            ).scalar()
+            has_any = db.session.query(
+                db.session.query(SqlaTable.id)
+                .filter(SqlaTable.database_id == self._model_id)
+                .exists()
+            ).scalar()
+        # Both cases block the delete (a soft-deleted dataset still FK-references
+        # the database), but the message differs: with only hidden rows left the
+        # operator's dataset list looks empty, so say so explicitly.
+        if has_live:
             raise DatabaseDeleteDatasetsExistFailedError()
+        if has_any:
+            raise DatabaseDeleteSoftDeletedDatasetsExistFailedError()

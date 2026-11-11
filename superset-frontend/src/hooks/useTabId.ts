@@ -17,55 +17,140 @@
  * under the License.
  */
 import { useEffect, useState } from 'react';
-import shortid from 'shortid';
-import { BroadcastChannel } from 'broadcast-channel';
+import { nanoid } from 'nanoid';
+import {
+  StrictBroadcastChannel,
+  TabIdChannelMessage,
+} from './strictBroadcastChannel';
 
-interface TabIdChannelMessage {
-  type: 'REQUESTING_TAB_ID' | 'TAB_ID_DENIED';
-  tabId: string;
+const TAB_ID_CHANNEL_NAME = 'tab_id_channel';
+
+// Constructed lazily (on first hook use) rather than at module load: importing
+// this module must have no side effects, so non-React callers of getTabId (and
+// test environments without BroadcastChannel) don't need the native channel.
+let channel: StrictBroadcastChannel<TabIdChannelMessage> | undefined;
+
+function getChannel(): StrictBroadcastChannel<TabIdChannelMessage> {
+  if (!channel) {
+    channel = new BroadcastChannel(TAB_ID_CHANNEL_NAME);
+  }
+  return channel;
 }
 
-// TODO: We are using broadcast-channel to support Safari.
-// The native BroadcastChannel API will be supported in Safari version 15.4.
-// After that, we should remove this dependency and use the native API.
-const channel = new BroadcastChannel<TabIdChannelMessage>('tab_id_channel');
+function isStorageAvailable() {
+  try {
+    return window.localStorage && window.sessionStorage;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Fallback id for when storage is unavailable: stable for the page lifetime.
+let fallbackTabId: string | undefined;
+
+// Listeners notified when this tab's id *changes* after first use — e.g. a
+// duplicated tab is reassigned a fresh id on a TAB_ID_DENIED collision. Consumers
+// that bake the tab id into long-lived state (the realtime socket registers its
+// per-tab channel from it) subscribe to re-sync.
+const tabIdChangeListeners = new Set<() => void>();
+
+/**
+ * Subscribe to tab-id changes. Returns an unsubscribe function. The listener
+ * fires when the id is reassigned (collision resolution), not on first creation.
+ */
+export function subscribeTabIdChange(listener: () => void): () => void {
+  tabIdChangeListeners.add(listener);
+  return () => {
+    tabIdChangeListeners.delete(listener);
+  };
+}
+
+function notifyTabIdChange() {
+  tabIdChangeListeners.forEach(listener => {
+    try {
+      listener();
+    } catch (error) {
+      // A listener error must not break tab-id coordination.
+    }
+  });
+}
+
+function createTabId(): string {
+  let lastTabId;
+  try {
+    lastTabId = window.localStorage.getItem('last_tab_id');
+  } catch (error) {
+    // continue regardless of error
+  }
+  const newTabId = String(lastTabId ? Number.parseInt(lastTabId, 10) + 1 : 1);
+  try {
+    window.sessionStorage.setItem('tab_id', newTabId);
+    window.localStorage.setItem('last_tab_id', newTabId);
+  } catch (error) {
+    // continue regardless of error
+  }
+  return newTabId;
+}
+
+/**
+ * Return this browser tab's stable id, creating (and persisting) one if absent.
+ *
+ * Shared by the `useTabId` hook and non-React callers (e.g. the async task
+ * middleware, which sends it as `tab_id` on chart-data submit/cancel so the
+ * backend can ref-count tabs of a shared task). Both read/write the same
+ * `sessionStorage['tab_id']`, so a tab presents one consistent id everywhere,
+ * whichever runs first.
+ */
+export function getTabId(): string {
+  if (!isStorageAvailable()) {
+    if (!fallbackTabId) {
+      fallbackTabId = nanoid();
+    }
+    return fallbackTabId;
+  }
+  let stored;
+  try {
+    stored = window.sessionStorage.getItem('tab_id');
+  } catch (error) {
+    // continue regardless of error
+  }
+  return stored || createTabId();
+}
 
 export function useTabId() {
   const [tabId, setTabId] = useState<string>();
 
-  function isStorageAvailable() {
-    try {
-      return window.localStorage && window.sessionStorage;
-    } catch (error) {
-      return false;
-    }
-  }
   useEffect(() => {
     if (!isStorageAvailable()) {
-      if (!tabId) {
-        setTabId(shortid.generate());
-      }
-      return;
+      setTabId(prev => prev ?? getTabId());
+      return undefined;
     }
 
-    const updateTabId = () => {
-      let lastTabId;
-      try {
-        lastTabId = window.localStorage.getItem('last_tab_id');
-      } catch (error) {
-        // continue regardless of error
+    const channel = getChannel();
+    // The id this tab currently claims. A mutable local (not the render-captured
+    // `tabId` state) so the message handler always compares against the live value
+    // — otherwise a TAB_ID_DENIED that arrives before the state/effect updates
+    // (e.g. on the very first render, when `tabId` is still undefined) is dropped,
+    // leaving two tabs sharing an id and colliding on the backend per-tab consumer
+    // key (`<principal>:<tab_id>`).
+    let currentId: string | undefined;
+
+    const handler = (messageEvent: MessageEvent<TabIdChannelMessage>) => {
+      if (messageEvent.data.tabId !== currentId) return;
+      if (messageEvent.data.type === 'REQUESTING_TAB_ID') {
+        channel.postMessage({ type: 'TAB_ID_DENIED', tabId: currentId });
+      } else if (messageEvent.data.type === 'TAB_ID_DENIED') {
+        currentId = createTabId();
+        setTabId(currentId);
+        // The id was reassigned; tell consumers that pinned the old one (e.g. the
+        // realtime socket's per-tab channel) to re-sync.
+        notifyTabIdChange();
       }
-      const newTabId = String(
-        lastTabId ? Number.parseInt(lastTabId, 10) + 1 : 1,
-      );
-      try {
-        window.sessionStorage.setItem('tab_id', newTabId);
-        window.localStorage.setItem('last_tab_id', newTabId);
-      } catch (error) {
-        // continue regardless of error
-      }
-      setTabId(newTabId);
     };
+    // Install the listener BEFORE broadcasting, so a peer's immediate denial of a
+    // duplicated id can't race ahead of us subscribing.
+    channel.addEventListener('message', handler);
+
     let storedTabId;
     try {
       storedTabId = window.sessionStorage.getItem('tab_id');
@@ -73,29 +158,16 @@ export function useTabId() {
       // continue regardless of error
     }
     if (storedTabId) {
-      channel.postMessage({
-        type: 'REQUESTING_TAB_ID',
-        tabId: storedTabId,
-      });
+      currentId = storedTabId;
       setTabId(storedTabId);
+      channel.postMessage({ type: 'REQUESTING_TAB_ID', tabId: storedTabId });
     } else {
-      updateTabId();
+      currentId = createTabId();
+      setTabId(currentId);
     }
 
-    channel.onmessage = messageEvent => {
-      if (messageEvent.tabId === tabId) {
-        if (messageEvent.type === 'REQUESTING_TAB_ID') {
-          const message: TabIdChannelMessage = {
-            type: 'TAB_ID_DENIED',
-            tabId: messageEvent.tabId,
-          };
-          channel.postMessage(message);
-        } else if (messageEvent.type === 'TAB_ID_DENIED') {
-          updateTabId();
-        }
-      }
-    };
-  }, [tabId]);
+    return () => channel.removeEventListener('message', handler);
+  }, []);
 
   return tabId;
 }

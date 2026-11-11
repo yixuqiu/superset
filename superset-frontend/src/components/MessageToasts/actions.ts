@@ -16,13 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import shortid from 'shortid';
+import { nanoid } from 'nanoid';
 import { ToastType, ToastMeta } from './types';
 
 type ToastOptions = Partial<Omit<ToastMeta, 'id' | 'toastType' | 'text'>>;
 
 export function getToastUuid(type: ToastType) {
-  return `${type}-${shortid.generate()}`;
+  return `${type}-${nanoid()}`;
 }
 
 export const ADD_TOAST = 'ADD_TOAST';
@@ -31,6 +31,8 @@ export function addToast({
   text,
   duration = 8000,
   noDuplicate = false,
+  allowHtml = false,
+  action,
 }: Omit<ToastMeta, 'id'>) {
   return {
     type: ADD_TOAST,
@@ -40,6 +42,12 @@ export function addToast({
       text,
       duration,
       noDuplicate,
+      // Must ride the payload explicitly: the destructure-and-rebuild above
+      // drops any field not named here, and the loss is silent -- the toast
+      // tests inject flags downstream of this hop, so they stay green while
+      // every HTML toast quietly loses its anchor.
+      allowHtml,
+      action,
     },
   };
 }

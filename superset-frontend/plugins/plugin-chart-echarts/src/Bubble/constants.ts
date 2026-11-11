@@ -22,16 +22,16 @@ import { EchartsBubbleFormData } from './types';
 
 export const DEFAULT_FORM_DATA: Partial<EchartsBubbleFormData> = {
   ...DEFAULT_LEGEND_FORM_DATA,
-  emitFilter: false,
-  logXAis: false,
+  logXAxis: false,
   logYAxis: false,
-  xAxisTitleMargin: 30,
-  yAxisTitleMargin: 30,
+  xAxisTitleMargin: 40,
+  yAxisTitleMargin: 50,
   truncateXAxis: false,
   truncateYAxis: false,
   xAxisBounds: [null, null],
   yAxisBounds: [null, null],
   xAxisLabelRotation: defaultXAxis.xAxisLabelRotation,
+  xAxisLabelInterval: defaultXAxis.xAxisLabelInterval,
   opacity: 0.6,
 };
 

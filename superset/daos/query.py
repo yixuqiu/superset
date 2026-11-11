@@ -15,17 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Union
 
 from superset import sql_lab
 from superset.common.db_query_status import QueryStatus
 from superset.daos.base import BaseDAO
-from superset.exceptions import QueryNotFoundException, SupersetCancelQueryException
+from superset.exceptions import QueryNotFoundException
 from superset.extensions import db
 from superset.models.sql_lab import Query, SavedQuery
 from superset.queries.filters import QueryFilter
 from superset.queries.saved_queries.filters import SavedQueryFilter
+from superset.sql.execution.utils import finish_query_stop, set_query_stopped
 from superset.utils.core import get_user_id
 from superset.utils.dates import now_as_float
 
@@ -34,26 +35,6 @@ logger = logging.getLogger(__name__)
 
 class QueryDAO(BaseDAO[Query]):
     base_filter = QueryFilter
-
-    @staticmethod
-    def update_saved_query_exec_info(query_id: int) -> None:
-        """
-        Propagates query execution info back to saved query if applicable
-
-        :param query_id: The query id
-        :return:
-        """
-        query = db.session.query(Query).get(query_id)
-        related_saved_queries = (
-            db.session.query(SavedQuery)
-            .filter(SavedQuery.database == query.database)
-            .filter(SavedQuery.sql == query.sql)
-        ).all()
-        if related_saved_queries:
-            for saved_query in related_saved_queries:
-                saved_query.rows = query.rows
-                saved_query.last_run = datetime.now()
-            db.session.commit()
 
     @staticmethod
     def save_metadata(query: Query, payload: dict[str, Any]) -> None:
@@ -68,7 +49,9 @@ class QueryDAO(BaseDAO[Query]):
     @staticmethod
     def get_queries_changed_after(last_updated_ms: Union[float, int]) -> list[Query]:
         # UTC date time, same that is stored in the DB.
-        last_updated_dt = datetime.utcfromtimestamp(last_updated_ms / 1000)
+        last_updated_dt: datetime = datetime.fromtimestamp(
+            last_updated_ms / 1000, timezone.utc
+        ).replace(tzinfo=None)
 
         return (
             db.session.query(Query)
@@ -77,8 +60,13 @@ class QueryDAO(BaseDAO[Query]):
         )
 
     @staticmethod
-    def stop_query(client_id: str) -> None:
-        query = db.session.query(Query).filter_by(client_id=client_id).one_or_none()
+    def stop_query(client_id: str) -> Query:
+        """Stop a query and return its recorded outcome, including a lost race."""
+        query = (
+            db.session.query(Query)
+            .filter(Query.client_id == client_id, Query.user_id == get_user_id())
+            .one_or_none()
+        )
         if not query:
             raise QueryNotFoundException(f"Query with client_id {client_id} not found")
 
@@ -90,14 +78,14 @@ class QueryDAO(BaseDAO[Query]):
             logger.warning(
                 "Query with client_id could not be stopped: query already complete",
             )
-            return
+            return query
 
-        if not sql_lab.cancel_query(query):
-            raise SupersetCancelQueryException("Could not cancel query")
-
-        query.status = QueryStatus.STOPPED
-        query.end_time = now_as_float()
-        db.session.commit()
+        with db.session.no_autoflush:
+            if not set_query_stopped(query, now_as_float()):
+                db.session.commit()  # pylint: disable=consider-using-transaction
+                return query
+            finish_query_stop(query, lambda: sql_lab.cancel_query(query))
+        return query
 
 
 class SavedQueryDAO(BaseDAO[SavedQuery]):

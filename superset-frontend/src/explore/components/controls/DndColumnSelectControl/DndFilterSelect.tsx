@@ -16,21 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { arrayMove } from '@dnd-kit/sortable';
+import { logging } from '@apache-superset/core/utils';
+import { t } from '@apache-superset/core/translation';
 import {
-  logging,
   Metric,
   QueryFormData,
   QueryFormMetric,
   SupersetClient,
-  t,
 } from '@superset-ui/core';
 import {
   ColumnMeta,
   isColumnMeta,
   isTemporalColumn,
 } from '@superset-ui/chart-controls';
-import Modal from 'src/components/Modal';
+import { Modal } from '@superset-ui/core/components';
 import {
   OPERATOR_ENUM_TO_OPERATOR_TYPE,
   Operators,
@@ -48,6 +49,7 @@ import {
 } from 'src/explore/components/DatasourcePanel/types';
 import { DndItemType } from 'src/explore/components/DndItemType';
 import { ControlComponentProps } from 'src/explore/components/Control';
+import { toQueryString } from 'src/utils/urlUtils';
 import DndAdhocFilterOption from './DndAdhocFilterOption';
 import { useDefaultTimeFilter } from '../DateFilterControl/utils';
 import { Clauses, ExpressionTypes } from '../FilterControl/types';
@@ -65,8 +67,10 @@ const DND_ACCEPTED_TYPES = [
 const isDictionaryForAdhocFilter = (value: OptionValueType) =>
   !(value instanceof AdhocFilter) && value?.expressionType;
 
-export interface DndFilterSelectProps
-  extends ControlComponentProps<OptionValueType[]> {
+export interface DndFilterSelectProps extends ControlComponentProps<
+  OptionValueType[]
+> {
+  semanticSelectionVersion?: string;
   columns: ColumnMeta[];
   savedMetrics: Metric[];
   selectedMetrics: QueryFormMetric[];
@@ -89,11 +93,16 @@ const DndFilterSelect = (props: DndFilterSelectProps) => {
     let extra = {};
     if (datasource?.extra) {
       try {
-        extra = JSON.parse(datasource.extra);
+        extra =
+          typeof datasource.extra === 'string'
+            ? JSON.parse(datasource.extra)
+            : datasource.extra;
       } catch {} // eslint-disable-line no-empty
     }
     return extra;
   }, [datasource?.extra]);
+
+  const { semanticSelectionVersion } = props;
 
   const propsValues = Array.from(props.value ?? []);
   const [values, setValues] = useState(
@@ -175,13 +184,20 @@ const DndFilterSelect = (props: DndFilterSelectProps) => {
       const dbId = datasource.database?.id;
       const {
         datasource_name: name,
+        catalog,
         schema,
         is_sqllab_view: isSqllabView,
       } = datasource;
 
       if (!isSqllabView && dbId && name && schema) {
         SupersetClient.get({
-          endpoint: `/api/v1/database/${dbId}/table_metadata/extra/?name=${name}&schema=${schema}`,
+          endpoint: `/api/v1/database/${dbId}/table_metadata/extra/${toQueryString(
+            {
+              name,
+              catalog,
+              schema,
+            },
+          )}`,
         })
           .then(({ json }: { json: Record<string, any> }) => {
             if (json?.partitions) {
@@ -241,14 +257,14 @@ const DndFilterSelect = (props: DndFilterSelectProps) => {
 
   const onShiftOptions = useCallback(
     (dragIndex: number, hoverIndex: number) => {
-      const newValues = [...values];
-      [newValues[hoverIndex], newValues[dragIndex]] = [
-        newValues[dragIndex],
-        newValues[hoverIndex],
-      ];
+      // @dnd-kit fires the reorder once at drag-end with the final indices, so
+      // this must be a full arrayMove, not an adjacent swap. Commit through
+      // onChange so the new order persists to form_data.
+      const newValues = arrayMove(values, dragIndex, hoverIndex);
       setValues(newValues);
+      onChange(newValues);
     },
-    [values],
+    [onChange, values],
   );
 
   const getMetricExpression = useCallback(
@@ -345,10 +361,12 @@ const DndFilterSelect = (props: DndFilterSelectProps) => {
     () =>
       values.map((adhocFilter: AdhocFilter, index: number) => (
         <DndAdhocFilterOption
+          key={adhocFilter.filterOptionName ?? index}
           index={index}
           adhocFilter={adhocFilter}
           options={options}
           datasource={datasource}
+          semanticSelectionVersion={semanticSelectionVersion}
           onFilterEdit={onFilterEdit}
           partitionColumn={partitionColumn}
           onClickClose={onClickClose}
@@ -362,6 +380,7 @@ const DndFilterSelect = (props: DndFilterSelectProps) => {
       options,
       partitionColumn,
       datasource,
+      semanticSelectionVersion,
       values,
     ],
   );
@@ -441,12 +460,15 @@ const DndFilterSelect = (props: DndFilterSelectProps) => {
         accept={DND_ACCEPTED_TYPES}
         ghostButtonText={t('Drop columns/metrics here or click')}
         onClickGhostButton={handleClickGhostButton}
+        sortableType={DndItemType.FilterOption}
+        itemCount={values.length}
         {...props}
       />
       <AdhocFilterPopoverTrigger
         adhocFilter={adhocFilter}
         options={options}
         datasource={datasource}
+        semanticSelectionVersion={semanticSelectionVersion}
         onFilterEdit={onNewFilter}
         partitionColumn={partitionColumn}
         isControlledComponent

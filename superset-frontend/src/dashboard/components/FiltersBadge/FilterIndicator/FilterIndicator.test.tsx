@@ -16,9 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import userEvent from '@testing-library/user-event';
-import React from 'react';
-import { render, screen } from 'spec/helpers/testing-library';
+import { render, screen, userEvent } from 'spec/helpers/testing-library';
 import { Indicator } from 'src/dashboard/components/nativeFilters/selectors';
 import FilterIndicator from '.';
 
@@ -43,18 +41,20 @@ test('Should render', () => {
   render(<FilterIndicator {...props} />);
 
   expect(
-    screen.getByRole('button', { name: 'Vaccine Approach' }),
+    screen.getByRole('button', { name: 'search Vaccine Approach' }),
   ).toBeInTheDocument();
   expect(screen.getByRole('img')).toBeInTheDocument();
 });
 
-test('Should call "onClick"', () => {
+test('Should call "onClick"', async () => {
   const props = createProps();
   render(<FilterIndicator {...props} />);
 
-  expect(props.onClick).toBeCalledTimes(0);
-  userEvent.click(screen.getByRole('button', { name: 'Vaccine Approach' }));
-  expect(props.onClick).toBeCalledTimes(1);
+  expect(props.onClick).toHaveBeenCalledTimes(0);
+  await userEvent.click(
+    screen.getByRole('button', { name: 'search Vaccine Approach' }),
+  );
+  expect(props.onClick).toHaveBeenCalledTimes(1);
 });
 
 test('Should render "value"', () => {
@@ -64,12 +64,12 @@ test('Should render "value"', () => {
 
   expect(
     screen.getByRole('button', {
-      name: 'Vaccine Approach: any, string',
+      name: 'search Vaccine Approach: any, string',
     }),
   ).toBeInTheDocument();
 });
 
-test('Should render with default props', () => {
+test('Should render with default props', async () => {
   const props = createProps();
   delete props.indicator.path;
   render(<FilterIndicator indicator={props.indicator} />);
@@ -77,5 +77,7 @@ test('Should render with default props', () => {
   expect(
     screen.getByRole('button', { name: 'Vaccine Approach' }),
   ).toBeInTheDocument();
-  userEvent.click(screen.getByRole('button', { name: 'Vaccine Approach' }));
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Vaccine Approach' }),
+  );
 });

@@ -17,15 +17,15 @@
 # pylint: disable=too-few-public-methods, too-many-arguments
 from __future__ import annotations
 
-import copy
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from flask_babel import gettext as __
+from sqlalchemy.exc import SQLAlchemyError
 
+from superset import db
 from superset.commands.base import BaseCommand
 from superset.common.db_query_status import QueryStatus
-from superset.daos.exceptions import DAOCreateFailedError
 from superset.errors import SupersetErrorType
 from superset.exceptions import (
     SupersetErrorException,
@@ -41,6 +41,7 @@ from superset.sqllab.exceptions import (
 )
 from superset.sqllab.execution_context_convertor import ExecutionContextConvertor
 from superset.sqllab.limiting_factor import LimitingFactor
+from superset.utils.decorators import transaction
 
 if TYPE_CHECKING:
     from superset.daos.database import DatabaseDAO
@@ -90,7 +91,8 @@ class ExecuteSqlCommand(BaseCommand):
     def validate(self) -> None:
         pass
 
-    def run(  # pylint: disable=too-many-statements,useless-suppression
+    @transaction()
+    def run(
         self,
     ) -> CommandResult:
         """Runs arbitrary sql and returns data as json"""
@@ -115,10 +117,10 @@ class ExecuteSqlCommand(BaseCommand):
                 "status": status,
                 "payload": self._execution_context_convertor.serialize_payload(),
             }
-        except (SupersetErrorException, SupersetErrorsException) as ex:
+        except (SupersetErrorException, SupersetErrorsException):
             # to make sure we raising the original
             # SupersetErrorsException || SupersetErrorsException
-            raise ex
+            raise
         except Exception as ex:
             raise SqlLabException(self._execution_context, exception=ex) from ex
 
@@ -146,21 +148,40 @@ class ExecuteSqlCommand(BaseCommand):
 
             # Necessary to check access before rendering the Jinjafied query as the
             # some Jinja macros execute statements upon rendering.
-            self._validate_access(query)
+            self._validate_access(query, self._execution_context.template_params)
             self._execution_context.set_query(query)
             rendered_query = self._sql_query_render.render(self._execution_context)
-            validate_rendered_query = copy.copy(query)
-            validate_rendered_query.sql = rendered_query
+            # The check above authorizes a render of query.sql + template_params
+            # performed before rendering, so that macros with side effects are
+            # gated before they run. self._sql_query_render.render() above is an
+            # independent second render of the same source; for a
+            # nondeterministic template (e.g. one using Jinja's `random` filter
+            # to pick a table) the two renders can diverge, letting a query
+            # read a table the first check never saw. Re-validate the literal
+            # rendered text that is about to execute.
+            self._validate_rendered_access(query, rendered_query)
             self._set_query_limit_if_required(rendered_query)
             self._query_dao.update(
                 query, {"limit": self._execution_context.query.limit}
             )
+            # Commit now, before dispatch. The async executor below hands off to
+            # a Celery worker that re-fetches this query on its own connection
+            # (`get_query` in superset/sql_lab.py); under READ COMMITTED that
+            # worker only sees the limit recomputed just above once it is
+            # committed. `@transaction()` on `run()` only commits after this
+            # whole method returns, which is too late: `.delay()` can hand the
+            # task to an already-idle worker before that commit lands, so the
+            # worker reads back the row's limit as it was at creation time (the
+            # raw dropdown value from `create_query()`) instead of the smaller
+            # value just computed from the query's own SQL LIMIT. Same race and
+            # fix as apache/superset#40070.
+            db.session.commit()  # pylint: disable=consider-using-transaction
             return self._sql_json_executor.execute(
                 self._execution_context, rendered_query, self._log_params
             )
-        except Exception as ex:
+        except Exception:
             self._query_dao.update(query, {"status": QueryStatus.FAILED})
-            raise ex
+            raise
 
     def _get_the_query_db(self) -> Database:
         mydb: Any = self._database_dao.find_by_id(self._execution_context.database_id)
@@ -178,9 +199,22 @@ class ExecuteSqlCommand(BaseCommand):
             )
 
     def _save_new_query(self, query: Query) -> None:
+        """
+        Saves the new SQL Lab query.
+
+        Committing within a transaction violates the "unit of work" construct, but is
+        necessary for async querying. The Celery task is defined within the confines
+        of another command and needs to read a previously committed state given the
+        `READ COMMITTED` isolation level.
+
+        To mitigate said issue, ideally there would be a command to prepare said query
+        and another to execute it, either in a sync or async manner.
+
+        :param query: The SQL Lab query
+        """
         try:
             self._query_dao.create(query)
-        except DAOCreateFailedError as ex:
+        except SQLAlchemyError as ex:
             raise SqlLabException(
                 self._execution_context,
                 SupersetErrorType.GENERIC_DB_ENGINE_ERROR,
@@ -189,11 +223,32 @@ class ExecuteSqlCommand(BaseCommand):
                 "Please contact an administrator for further assistance or try again.",
             ) from ex
 
-    def _validate_access(self, query: Query) -> None:
+        db.session.commit()  # pylint: disable=consider-using-transaction
+
+    def _validate_access(
+        self, query: Query, template_params: Optional[dict[str, Any]] = None
+    ) -> None:
         try:
-            self._access_validator.validate(query)
+            self._access_validator.validate(query, template_params)
         except Exception as ex:
             raise QueryIsForbiddenToAccessException(self._execution_context, ex) from ex
+
+    def _validate_rendered_access(self, query: Query, rendered_query: str) -> None:
+        """
+        Re-authorize the exact SQL that is about to execute.
+
+        Pins ``query.executed_sql`` to the literal, already-rendered text so
+        ``security_manager.raise_for_access``'s "prefer executed_sql" path
+        authorizes that exact SQL directly, with no further Jinja
+        re-render (see its docstring). ``executed_sql`` is reset
+        afterwards so the execution path can assign its own final
+        (limited / per-block mutated) SQL.
+        """
+        query.executed_sql = rendered_query
+        try:
+            self._validate_access(query, self._execution_context.template_params)
+        finally:
+            query.executed_sql = None
 
     def _set_query_limit_if_required(
         self,
@@ -227,7 +282,9 @@ class ExecuteSqlCommand(BaseCommand):
 
 
 class CanAccessQueryValidator:
-    def validate(self, query: Query) -> None:
+    def validate(
+        self, query: Query, template_params: Optional[dict[str, Any]] = None
+    ) -> None:
         raise NotImplementedError()
 
 

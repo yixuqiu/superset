@@ -14,28 +14,26 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# isort:skip_file
 from operator import and_
-from unittest.mock import patch  # noqa: F401
-import pytest
-from superset.daos.exceptions import DAOCreateFailedError, DAOException  # noqa: F401
-from superset.models.slice import Slice
-from superset.models.sql_lab import SavedQuery  # noqa: F401
-from superset.daos.tag import TagDAO
-from superset.tags.exceptions import InvalidTagNameError  # noqa: F401
-from superset.tags.models import ObjectType, Tag, TaggedObject
-from tests.integration_tests.tags.api_tests import TAGS_FIXTURE_COUNT
 
-import tests.integration_tests.test_app  # pylint: disable=unused-import  # noqa: F401
-from superset import db, security_manager  # noqa: F401
-from superset.daos.dashboard import DashboardDAO  # noqa: F401
+import pytest
+
+from superset import db
+from superset.daos.tag import TagDAO
 from superset.models.dashboard import Dashboard
+from superset.models.slice import Slice
+from superset.models.sql_lab import SavedQuery
+from superset.tags.models import ObjectType, Tag, TaggedObject, TagType
 from tests.integration_tests.base_tests import SupersetTestCase
+from tests.integration_tests.constants import ADMIN_USERNAME
+from tests.integration_tests.fixtures.tags import (
+    with_tagging_system_feature,  # noqa: F401
+)
 from tests.integration_tests.fixtures.world_bank_dashboard import (
     load_world_bank_dashboard_with_slices,  # noqa: F401
     load_world_bank_data,  # noqa: F401
 )
-from tests.integration_tests.fixtures.tags import with_tagging_system_feature  # noqa: F401
+from tests.integration_tests.tags.api_tests import TAGS_FIXTURE_COUNT
 
 
 class TestTagsDAO(SupersetTestCase):
@@ -67,7 +65,7 @@ class TestTagsDAO(SupersetTestCase):
         db.session.commit()
         return tagged_object
 
-    @pytest.fixture()
+    @pytest.fixture
     def create_tags(self):
         with self.create_app().app_context():
             # clear tags table
@@ -86,7 +84,7 @@ class TestTagsDAO(SupersetTestCase):
                 )
             yield tags
 
-    @pytest.fixture()
+    @pytest.fixture
     def create_tagged_objects(self):
         with self.create_app().app_context():
             # clear tags table
@@ -147,11 +145,21 @@ class TestTagsDAO(SupersetTestCase):
         # check if tag exists
         assert db.session.query(Tag).filter(Tag.name == "example tag 1").first()
 
+        # test that a combination of non-unique and unique tags
+        # can be added.
+        TagDAO.create_custom_tagged_objects(
+            object_type=ObjectType.dashboard.name,
+            object_id=1,
+            tag_names=["example tag 1", "example tag 2"],
+        )
+        assert db.session.query(Tag).filter(Tag.name == "example tag 2").first()
+
     @pytest.mark.usefixtures("load_world_bank_dashboard_with_slices")
     @pytest.mark.usefixtures("with_tagging_system_feature")
     @pytest.mark.usefixtures("create_tags")
     # test get objects from tag
     def test_get_objects_from_tag(self):
+        self.login(ADMIN_USERNAME)
         # create tagged objects
         dashboard = (
             db.session.query(Dashboard)
@@ -164,17 +172,17 @@ class TestTagsDAO(SupersetTestCase):
             object_id=dashboard_id, object_type=ObjectType.dashboard, tag_id=tag.id
         )
         # get objects
-        tagged_objects = TagDAO.get_tagged_objects_for_tags(
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_names(
             ["example_tag_1", "example_tag_2"]
         )
         assert len(tagged_objects) == 1
 
         # test get objects from tag with type
-        tagged_objects = TagDAO.get_tagged_objects_for_tags(
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_names(
             ["example_tag_1", "example_tag_2"], obj_types=["dashboard", "chart"]
         )
         assert len(tagged_objects) == 1
-        tagged_objects = TagDAO.get_tagged_objects_for_tags(
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_names(
             ["example_tag_1", "example_tag_2"], obj_types=["chart"]
         )
         assert len(tagged_objects) == 0
@@ -188,6 +196,7 @@ class TestTagsDAO(SupersetTestCase):
                     TaggedObject.object_type == ObjectType.chart,
                 ),
             )
+            .join(Tag, TaggedObject.tag_id == Tag.id)
             .distinct(Slice.id)
             .count()
         )
@@ -200,17 +209,18 @@ class TestTagsDAO(SupersetTestCase):
                     TaggedObject.object_type == ObjectType.dashboard,
                 ),
             )
+            .join(Tag, TaggedObject.tag_id == Tag.id)
             .distinct(Dashboard.id)
             .count()
             + num_charts
         )
         # gets all tagged objects of type dashboard and chart
-        tagged_objects = TagDAO.get_tagged_objects_for_tags(
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_names(
             obj_types=["dashboard", "chart"]
         )
         assert len(tagged_objects) == num_charts_and_dashboards
         # test objects are retrieved by type
-        tagged_objects = TagDAO.get_tagged_objects_for_tags(obj_types=["chart"])
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_names(obj_types=["chart"])
         assert len(tagged_objects) == num_charts
 
     @pytest.mark.usefixtures("load_world_bank_dashboard_with_slices")
@@ -218,6 +228,7 @@ class TestTagsDAO(SupersetTestCase):
     @pytest.mark.usefixtures("create_tags")
     # test get objects from tag
     def test_get_objects_from_tag_with_id(self):
+        self.login(ADMIN_USERNAME)
         # create tagged objects
         dashboard = (
             db.session.query(Dashboard)
@@ -232,16 +243,16 @@ class TestTagsDAO(SupersetTestCase):
             object_id=dashboard_id, object_type=ObjectType.dashboard, tag_id=tag_1.id
         )
         # get objects
-        tagged_objects = TagDAO.get_tagged_objects_by_tag_id(tag_ids)
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_ids(tag_ids)
         assert len(tagged_objects) == 1
 
         # test get objects from tag with type
-        tagged_objects = TagDAO.get_tagged_objects_by_tag_id(
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_ids(
             tag_ids, obj_types=["dashboard", "chart"]
         )
         assert len(tagged_objects) == 1
 
-        tagged_objects = TagDAO.get_tagged_objects_by_tag_id(
+        tagged_objects = TagDAO.get_tagged_objects_by_tag_ids(
             tag_ids, obj_types=["chart"]
         )
         assert len(tagged_objects) == 0
@@ -326,3 +337,94 @@ class TestTagsDAO(SupersetTestCase):
             .first()
         )
         assert tagged_object is None
+
+    @pytest.mark.usefixtures("with_tagging_system_feature")
+    def test_tagged_object_cleanup_on_dashboard_delete(self):
+        """Deleting a tagged dashboard cleans up its tagged_object rows.
+
+        Regression guard for ObjectUpdater.after_delete, the one part of the
+        old auto-tagging event-listener machinery still registered: unlike
+        editor:/type:/favorited_by: generation (removed, see TagType's
+        docstring), this cleanup applies to every tag on the object -- custom
+        tags included -- and nothing else removes these rows, since
+        TaggedObject.object_id carries no foreign key (see its column
+        comment).
+        """
+        dashboard = Dashboard(
+            dashboard_title="tag cleanup test", slug="tag-cleanup-test"
+        )
+        db.session.add(dashboard)
+        db.session.commit()
+        dashboard_id = dashboard.id
+
+        tag = self.insert_tag(name="cleanup_test_tag", tag_type=TagType.custom)
+        self.insert_tagged_object(
+            tag_id=tag.id, object_id=dashboard_id, object_type=ObjectType.dashboard
+        )
+
+        def tagged_object_count() -> int:
+            return (
+                db.session.query(TaggedObject)
+                .filter(
+                    TaggedObject.object_type == ObjectType.dashboard.name,
+                    TaggedObject.object_id == dashboard_id,
+                )
+                .count()
+            )
+
+        assert tagged_object_count() == 1
+
+        db.session.delete(dashboard)
+        db.session.commit()
+
+        assert tagged_object_count() == 0
+
+        db.session.delete(tag)
+        db.session.commit()
+
+    @pytest.mark.usefixtures("with_tagging_system_feature")
+    def test_tagged_object_cleanup_on_chart_delete(self):
+        self._assert_tagged_object_cleanup_on_delete(ObjectType.chart)
+
+    @pytest.mark.usefixtures("with_tagging_system_feature")
+    def test_tagged_object_cleanup_on_saved_query_delete(self):
+        self._assert_tagged_object_cleanup_on_delete(ObjectType.query)
+
+    def _assert_tagged_object_cleanup_on_delete(self, object_type):
+        """Deleting a tagged chart or saved query cleans up its tagged_object
+        rows, guarding the delete listeners registered for those models."""
+        obj = (
+            Slice(slice_name="tag cleanup chart", viz_type="table")
+            if object_type == ObjectType.chart
+            else SavedQuery(label="tag cleanup query", sql="SELECT 1")
+        )
+        db.session.add(obj)
+        db.session.commit()
+        object_id = obj.id
+
+        tag = self.insert_tag(
+            name=f"cleanup_test_tag_{object_type.name}", tag_type=TagType.custom
+        )
+        self.insert_tagged_object(
+            tag_id=tag.id, object_id=object_id, object_type=object_type
+        )
+
+        def tagged_object_count() -> int:
+            return (
+                db.session.query(TaggedObject)
+                .filter(
+                    TaggedObject.object_type == object_type.name,
+                    TaggedObject.object_id == object_id,
+                )
+                .count()
+            )
+
+        assert tagged_object_count() == 1
+
+        db.session.delete(obj)
+        db.session.commit()
+
+        assert tagged_object_count() == 0
+
+        db.session.delete(tag)
+        db.session.commit()

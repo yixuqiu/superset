@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from functools import partial
 from typing import Optional
 
 from flask_babel import lazy_gettext as _
@@ -22,18 +23,35 @@ from flask_babel import lazy_gettext as _
 from superset import security_manager
 from superset.commands.base import BaseCommand
 from superset.commands.dashboard.exceptions import (
+    DashboardDeleteEmbeddedFailedError,
     DashboardDeleteFailedError,
     DashboardDeleteFailedReportsExistError,
     DashboardForbiddenError,
     DashboardNotFoundError,
 )
-from superset.daos.dashboard import DashboardDAO
-from superset.daos.exceptions import DAODeleteFailedError
+from superset.daos.dashboard import DashboardDAO, EmbeddedDashboardDAO
 from superset.daos.report import ReportScheduleDAO
 from superset.exceptions import SupersetSecurityException
 from superset.models.dashboard import Dashboard
+from superset.utils.decorators import on_error, transaction
 
 logger = logging.getLogger(__name__)
+
+
+class DeleteEmbeddedDashboardCommand(BaseCommand):
+    def __init__(self, dashboard: Dashboard):
+        self._dashboard = dashboard
+
+    @transaction(on_error=partial(on_error, reraise=DashboardDeleteEmbeddedFailedError))
+    def run(self) -> None:
+        self.validate()
+        return EmbeddedDashboardDAO.delete(self._dashboard.embedded)
+
+    def validate(self) -> None:
+        try:
+            security_manager.raise_for_editorship(self._dashboard)
+        except SupersetSecurityException as ex:
+            raise DashboardForbiddenError() from ex
 
 
 class DeleteDashboardCommand(BaseCommand):
@@ -41,15 +59,11 @@ class DeleteDashboardCommand(BaseCommand):
         self._model_ids = model_ids
         self._models: Optional[list[Dashboard]] = None
 
+    @transaction(on_error=partial(on_error, reraise=DashboardDeleteFailedError))
     def run(self) -> None:
         self.validate()
         assert self._models
-
-        try:
-            DashboardDAO.delete(self._models)
-        except DAODeleteFailedError as ex:
-            logger.exception(ex.exception)
-            raise DashboardDeleteFailedError() from ex
+        DashboardDAO.delete(self._models)
 
     def validate(self) -> None:
         # Validate/populate model exists
@@ -65,9 +79,9 @@ class DeleteDashboardCommand(BaseCommand):
                     report_names=",".join(report_names),
                 )
             )
-        # Check ownership
+        # Check editorship
         for model in self._models:
             try:
-                security_manager.raise_for_ownership(model)
+                security_manager.raise_for_editorship(model)
             except SupersetSecurityException as ex:
                 raise DashboardForbiddenError() from ex
